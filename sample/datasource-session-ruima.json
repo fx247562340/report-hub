@@ -1,0 +1,44 @@
+{
+  "code": "ds_ruima",
+  "name": "热镀锌 MES（RM-MES）",
+  "baseUrl": "https://bfafdx.com/RUIMA",
+  "authType": "session",
+  "authConfig": {
+    "loginPath": "/login",
+    "loginMethod": "POST",
+    "loginContentType": "form",
+    "usernameField": "userName",
+    "passwordField": "password",
+    "username": "<MES用户名>",
+    "password": "<MES密码>",
+    "fields": {
+      "timestamp": "{{now_ms}}",
+      "access_token": ""
+    },
+    "sign": {
+      "targetField": "sign",
+      "algorithm": "md5",
+      "template": "{{userName}}{{password}}{{timestamp}}",
+      "salt": "RUIMA_SECRET"
+    },
+    "token": {
+      "responsePath": "data.access_token",
+      "style": "query",
+      "name": "access_token"
+    },
+    "extraCookies": {
+      "myLineId": "15"
+    },
+    "ttlSeconds": 1800,
+    "reloginOnStatus": [401, 403, 1001]
+  },
+  "notes": {
+    "sign源码": "resources/src/views/user/login.html",
+    "sign算法": "md5(userName + password + timestamp + 'RUIMA_SECRET')  — CryptoJS.MD5，十六进制小写",
+    "登录地址": "POST /RUIMA/login",
+    "登录响应": "res.data.access_token 保存到 localStorage(layuiAdmin.access_token)",
+    "续期校验": "GET /RUIMA/loginTocken?access_token=...",
+    "业务请求": "query 带 access_token；并保留 JSESSIONID Cookie",
+    "前端附带Cookie": "myLineId（登录成功后写死为 15）"
+  }
+}

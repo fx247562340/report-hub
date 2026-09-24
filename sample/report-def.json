@@ -1,0 +1,57 @@
+{
+  "reportCode": "rpt_completion",
+  "description": "ERP完工报告 + MES挂次 + ERP工单 实时关联样例",
+  "root": "ds_completion",
+  "relations": [
+    {
+      "code": "rel_cr_hang",
+      "left": "ds_completion",
+      "right": "ds_hang",
+      "cardinality": "1-1",
+      "joinType": "left",
+      "on": [{ "leftField": "completion_id", "rightField": "hang_id" }],
+      "fetchMode": "dual_list",
+      "fetchConfig": { "rightEndpoint": "ep_hang_list" },
+      "expandMode": "flat"
+    },
+    {
+      "code": "rel_cr_wo",
+      "left": "ds_completion",
+      "right": "ds_wo",
+      "cardinality": "N-1",
+      "joinType": "left",
+      "on": [{ "leftField": "wo_no", "rightField": "wo_id" }],
+      "fetchMode": "child_batch",
+      "fetchConfig": {
+        "endpoint": "ep_wo_list",
+        "keyParam": "ids",
+        "maxKeysPerCall": 200
+      },
+      "expandMode": "flat",
+      "alternatives": {
+        "child_lookup": {
+          "endpoint": "ep_wo_list",
+          "detailEndpoint": "ep_wo_get",
+          "pathParam": "id",
+          "concurrency": 8
+        }
+      }
+    }
+  ],
+  "fields": [
+    { "key": "completion_id", "label": "完工报告ID", "from": "ds_completion.completion_id" },
+    { "key": "hang_no", "label": "挂次号", "from": "ds_hang.hang_no" },
+    { "key": "hang_qty", "label": "挂次数量", "from": "ds_hang.hang_qty" },
+    { "key": "machine", "label": "机台", "from": "ds_hang.machine" },
+    { "key": "wo_no", "label": "工单编号", "from": "ds_completion.wo_no" },
+    { "key": "product_name", "label": "产品名称", "from": "ds_wo.product_name" },
+    { "key": "plan_qty", "label": "计划数量", "from": "ds_wo.plan_qty" },
+    { "key": "done_qty", "label": "完工数量", "from": "ds_completion.done_qty" },
+    { "key": "done_date", "label": "完工日期", "from": "ds_completion.done_date" },
+    { "key": "workshop", "label": "车间", "from": "ds_completion.workshop" }
+  ],
+  "filters": [
+    { "key": "done_date", "label": "完工日期", "op": "date_range", "bind": "ds_completion.done_date" }
+  ],
+  "orderBy": [{ "field": "done_date", "dir": "desc" }]
+}

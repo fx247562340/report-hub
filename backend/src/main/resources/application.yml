@@ -1,0 +1,46 @@
+server:
+  port: ${SERVER_PORT:18080}
+
+spring:
+  application:
+    name: report-hub-api
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://127.0.0.1:15433/reporthub}
+    username: ${DB_USER:reporthub}
+    password: ${DB_PASSWORD:reporthub}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+reporthub:
+  jwt:
+    secret: ${JWT_SECRET:report-hub-dev-secret-change-me-32bytes-min!}
+    ttl-hours: ${JWT_TTL_HOURS:24}
+  security:
+    cors-allowed-origins: ${CORS_ORIGINS:http://localhost:*,http://127.0.0.1:*}
+  engine:
+    lookup-concurrency: 8
+    max-keys-per-batch: 200
+    max-root-rows: 20000
+    # 完整结果缓存：查询后预热，导出直接读缓存（秒开）
+    result-cache-ttl-seconds: 600
+    warm-on-query: true
+    # 首页看板缓存，避免每次打开都全量聚合
+    dashboard-ttl-seconds: 90
+  seed: ${SEED_DEMO:true}
+
+logging:
+  level:
+    com.reporthub: INFO

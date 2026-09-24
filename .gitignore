@@ -1,0 +1,28 @@
+# Build
+node_modules/
+dist/
+target/
+*.jar
+*.class
+
+# Local data / logs
+backend/data/
+*.log
+logs/
+tmp/
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Docker local volumes
+pgdata/

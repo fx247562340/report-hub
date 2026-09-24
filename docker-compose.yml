@@ -1,0 +1,61 @@
+# Report Hub 全栈一键部署
+#   docker compose up -d --build
+# 前端 http://localhost:15173  ·  API http://localhost:18080  ·  PG localhost:15433
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: report-hub-pg
+    environment:
+      POSTGRES_DB: reporthub
+      POSTGRES_USER: reporthub
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-reporthub}
+    ports:
+      - "${PG_PORT:-15433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reporthub -d reporthub"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    container_name: report-hub-api
+    environment:
+      SERVER_PORT: "8080"
+      DB_URL: jdbc:postgresql://db:5432/reporthub
+      DB_USER: reporthub
+      DB_PASSWORD: ${DB_PASSWORD:-reporthub}
+      DB_DRIVER: org.postgresql.Driver
+      JWT_SECRET: ${JWT_SECRET:-report-hub-compose-secret-change-me-32bytes!}
+      SEED_DEMO: "true"
+      # web 同源反代后跨域很少用到；本机直连 API 时打开
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173,http://localhost:18080}
+    ports:
+      - "${API_PORT:-18080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health | grep -q ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 40s
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    container_name: report-hub-web
+    ports:
+      - "${WEB_PORT:-15173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
