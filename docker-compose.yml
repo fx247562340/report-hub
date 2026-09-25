@@ -32,6 +32,7 @@ services:
       DB_DRIVER: org.postgresql.Driver
       JWT_SECRET: ${JWT_SECRET:-report-hub-compose-secret-change-me-32bytes!}
       SEED_DEMO: "true"
+      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx768m}
       # web 同源反代后跨域很少用到；本机直连 API 时打开
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173,http://localhost:18080}
     ports:
