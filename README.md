@@ -71,7 +71,9 @@ npm install && npm run dev       # http://127.0.0.1:15173（代理到 18080）
 
 - form/JSON 登录、MD5 签名（模板+盐）、Cookie、access_token、401 自动重登  
 - **U9C OpenAPI**：`authType=U9C OAuth`，`AuthLogin` 换 token（5 分钟）自动续期  
-- RM-MES 字段示例：`sample/datasource-session-ruima.json`
+- RM-MES 字段示例：`sample/datasource-session-ruima.json`  
+- **U9C 标准文档**：https://openapi.yyu9c.com/doc.html#/home  
+- 新增 U9C 报表流程见 **[docs/u9c-openapi.md](docs/u9c-openapi.md)**
 
 ## 关联取数
 
