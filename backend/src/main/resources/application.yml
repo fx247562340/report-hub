@@ -29,7 +29,8 @@ reporthub:
     secret: ${JWT_SECRET:report-hub-dev-secret-change-me-32bytes-min!}
     ttl-hours: ${JWT_TTL_HOURS:24}
   security:
-    cors-allowed-origins: ${CORS_ORIGINS:http://localhost:*,http://127.0.0.1:*}
+    # API 经 Nginx 同源反代；默认放行任意来源，可用 CORS_ORIGINS 收紧
+    cors-allowed-origins: ${CORS_ORIGINS:*}
   engine:
     lookup-concurrency: 8
     max-keys-per-batch: 200
