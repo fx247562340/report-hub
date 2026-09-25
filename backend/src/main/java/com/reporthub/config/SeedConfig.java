@@ -11,7 +11,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
 
-/** Only bootstrap default admin/member accounts. No demo business data. */
+/** 空库启动时初始化唯一管理员账号；不写演示业务数据。 */
 @Configuration
 public class SeedConfig {
     private static final Logger log = LoggerFactory.getLogger(SeedConfig.class);
@@ -27,22 +27,14 @@ public class SeedConfig {
             UserAccount admin = new UserAccount();
             admin.setId("u-admin");
             admin.setUsername("admin");
-            admin.setPasswordHash(encoder.encode("admin123"));
+            // 首次部署默认密码，登录后请立刻在「个人中心」修改
+            admin.setPasswordHash(encoder.encode("123456"));
             admin.setRole("admin");
             admin.setDisplayName("管理员");
             admin.setCreatedAt(Instant.now());
             userRepo.save(admin);
 
-            UserAccount member = new UserAccount();
-            member.setId("u-member");
-            member.setUsername("member");
-            member.setPasswordHash(encoder.encode("member123"));
-            member.setRole("member");
-            member.setDisplayName("查询员");
-            member.setCreatedAt(Instant.now());
-            userRepo.save(member);
-
-            log.info("Seeded default users admin/admin123 and member/member123 (config only, no demo datasets)");
+            log.info("Seeded admin user (username=admin). Change the default password after first login.");
         };
     }
 }

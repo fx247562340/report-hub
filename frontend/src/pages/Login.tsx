@@ -7,8 +7,8 @@ import { LogoMark } from '../components/Logo'
 export default function Login() {
   const nav = useNavigate()
   const loc = useLocation() as any
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('admin123')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [showPwd, setShowPwd] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -93,21 +93,6 @@ export default function Login() {
             <span>{loading ? '登录中…' : '登 录'}</span>
             {!loading && <Icon name="arrowLeft" size={16} className="flip-x" />}
           </button>
-
-          <div className="login-divider">
-            <span>演示账号</span>
-          </div>
-
-          <div className="login-demo">
-            <div className="login-demo-item">
-              <b>admin</b>
-              <span>配置 · admin123</span>
-            </div>
-            <div className="login-demo-item">
-              <b>member</b>
-              <span>查询 · member123</span>
-            </div>
-          </div>
         </form>
       </main>
     </div>

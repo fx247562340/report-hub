@@ -239,9 +239,9 @@ export default function About() {
             <div className="k">个人中心</div>
             <div>改显示名、改密码（顶栏头像进入）</div>
           </div>
-          <div className="code-block" style={{ marginTop: 12 }}>{`演示账号（部署后请立刻改掉）
-  admin  / admin123    配置
-  member / member123   查询`}</div>
+          <div className="code-block" style={{ marginTop: 12 }}>{`首次部署会初始化管理员
+  用户名：admin
+  密码：  123456（登录后请立刻在「个人中心」修改）`}</div>
         </div>
 
         <div className="card">
