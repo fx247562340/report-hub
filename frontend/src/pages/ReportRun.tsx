@@ -66,6 +66,24 @@ export default function ReportRun() {
   const [showJump, setShowJump] = useState(true)
   const [pageInput, setPageInput] = useState('1')
 
+  const pageCount = Math.max(1, Math.ceil(total / Math.max(1, pageSize)))
+  const pagerItems = useMemo(() => {
+    const items: (number | '…')[] = []
+    const push = (n: number) => {
+      if (!items.includes(n)) items.push(n)
+    }
+    if (pageCount <= 7) {
+      for (let i = 1; i <= pageCount; i++) push(i)
+      return items
+    }
+    push(1)
+    if (page > 3) items.push('…')
+    for (let i = Math.max(2, page - 1); i <= Math.min(pageCount - 1, page + 1); i++) push(i)
+    if (page < pageCount - 2) items.push('…')
+    push(pageCount)
+    return items
+  }, [page, pageCount])
+
   useEffect(() => {
     api.get<any>(`/api/reports/${code}/meta`).then((m) => {
       setMeta(m)
@@ -264,42 +282,47 @@ export default function ReportRun() {
         </div>
       </div>
 
-      <div className="table-wrap" style={{ marginBottom: 14 }}>
-        {loading && rows.length === 0 ? (
-          <div style={{ padding: 8 }}><TableSkeleton rows={6} cols={Math.min(columns.length || 4, 8)} /></div>
-        ) : (
-        <table>
-          <thead>
-            <tr>
-              {columns.map((c) => <th key={c.key}>{c.label || c.key}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, idx) => (
-              <tr key={idx}>
-                {columns.map((c) => (
-                  <td key={c.key}>{row[c.key] ?? '-'}</td>
-                ))}
+      <div className="report-result">
+        <div className="table-wrap">
+          {loading && rows.length === 0 ? (
+            <div style={{ padding: 8 }}><TableSkeleton rows={6} cols={Math.min(columns.length || 4, 8)} /></div>
+          ) : (
+          <table>
+            <thead>
+              <tr>
+                {columns.map((c) => <th key={c.key}>{c.label || c.key}</th>)}
               </tr>
-            ))}
-          </tbody>
-        </table>
-        )}
-        {rows.length === 0 && !loading && (
-          <EmptyState
-            variant="search"
-            title="无数据"
-            desc="换个日期或状态再查，或检查接口返回"
-          />
-        )}
+            </thead>
+            <tbody>
+              {rows.map((row, idx) => (
+                <tr key={idx}>
+                  {columns.map((c) => (
+                    <td key={c.key}>{row[c.key] ?? '-'}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          )}
+          {rows.length === 0 && !loading && (
+            <EmptyState
+              variant="search"
+              title="无数据"
+              desc="换个日期或状态再查，或检查接口返回"
+            />
+          )}
+        </div>
       </div>
 
-      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 14 }}>
-        <div className="row">
-          <span className="muted">共 {total} 行</span>
+      <div className="report-pager">
+        <div className="pager-meta">
+          <span>总计</span>
+          <b>{total.toLocaleString()}</b>
+        </div>
+        <div className="pager-meta">
+          <span>每页行数</span>
           <select
             className="select"
-            style={{ width: 110 }}
             value={String(pageSize)}
             onChange={(e) => {
               const n = Number(e.target.value)
@@ -307,41 +330,80 @@ export default function ReportRun() {
               run(1, n)
             }}
           >
-            {pageOpt.map((n) => <option key={n} value={n}>{n} 条/页</option>)}
+            {pageOpt.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
-        <div className="row">
-          <button className="btn sm" disabled={page <= 1 || loading} onClick={() => run(page - 1)}>上一页</button>
-          <input
-            className="input"
-            style={{ width: 70, textAlign: 'center' }}
-            value={pageInput}
-            onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ''))}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                const n = Math.max(1, Number(pageInput) || 1)
-                run(n)
-              }
-            }}
-          />
-          <span className="muted">/ {Math.max(1, Math.ceil(total / pageSize))}</span>
+        <div className="pager-pages">
           <button
-            className="btn sm"
-            disabled={page * pageSize >= total || loading}
-            onClick={() => run(page + 1)}
+            className="pager-btn"
+            disabled={page <= 1 || loading}
+            onClick={() => run(1)}
+            title="首页"
           >
-            下一页
+            «
           </button>
-          {showJump && (
+          <button
+            className="pager-btn"
+            disabled={page <= 1 || loading}
+            onClick={() => run(page - 1)}
+            title="上一页"
+          >
+            ‹
+          </button>
+          {pagerItems.map((it, i) =>
+            it === '…' ? (
+              <span key={`e${i}`} className="pager-ellipsis">…</span>
+            ) : (
+              <button
+                key={it}
+                className={`pager-btn${it === page ? ' active' : ''}`}
+                disabled={loading}
+                onClick={() => run(Number(it))}
+              >
+                {it}
+              </button>
+            )
+          )}
+          <button
+            className="pager-btn"
+            disabled={page >= pageCount || loading}
+            onClick={() => run(page + 1)}
+            title="下一页"
+          >
+            ›
+          </button>
+          <button
+            className="pager-btn"
+            disabled={page >= pageCount || loading}
+            onClick={() => run(pageCount)}
+            title="末页"
+          >
+            »
+          </button>
+        </div>
+        {showJump && (
+          <div className="pager-meta">
+            <span>跳至</span>
+            <input
+              className="input"
+              value={pageInput}
+              onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const n = Math.min(pageCount, Math.max(1, Number(pageInput) || 1))
+                  run(n)
+                }
+              }}
+            />
             <button
-              className="btn sm"
+              className="pager-btn"
               disabled={loading}
-              onClick={() => run(Math.max(1, Number(pageInput) || 1))}
+              onClick={() => run(Math.min(pageCount, Math.max(1, Number(pageInput) || 1)))}
             >
               跳转
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {isAdmin && (
