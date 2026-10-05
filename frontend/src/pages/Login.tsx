@@ -1,5 +1,5 @@
-import { FormEvent, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { FormEvent, useEffect, useState } from 'react'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, setSession, User } from '../api/client'
 import Icon from '../components/Icon'
 import { LogoMark } from '../components/Logo'
@@ -7,11 +7,18 @@ import { LogoMark } from '../components/Logo'
 export default function Login() {
   const nav = useNavigate()
   const loc = useLocation() as any
+  const [search] = useSearchParams()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPwd, setShowPwd] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (search.get('reason') === 'expired') {
+      setError('登录已过期，请重新登录')
+    }
+  }, [search])
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()

@@ -38,6 +38,21 @@ export class ApiError extends Error {
   }
 }
 
+function isAuthExpired(status: number, path: string) {
+  if (status !== 401) return false
+  const pathname = path.startsWith('http') ? new URL(path).pathname : path.split('?')[0]
+  // 登录接口本身的 401 是密码错误，不是会话过期
+  return !pathname.startsWith('/api/auth/login') && !pathname.startsWith('/api/auth/register')
+}
+
+function redirectToLogin() {
+  clearSession()
+  const target = '/login?reason=expired'
+  if (window.location.pathname + window.location.search !== target) {
+    window.location.assign(target)
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -52,12 +67,25 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   try {
     payload = text ? JSON.parse(text) : null
   } catch {
+    if (isAuthExpired(res.status, path)) redirectToLogin()
     throw new ApiError(text || res.statusText, res.status)
+  }
+  if (isAuthExpired(res.status, path)) {
+    redirectToLogin()
+    throw new ApiError('登录已过期，请重新登录', 401)
   }
   if (!res.ok || payload?.ok === false) {
     throw new ApiError(payload?.error || res.statusText || '请求失败', res.status)
   }
   return payload.data as T
+}
+
+/** 导出等自定义 fetch 也要统一处理会话过期 */
+export function ensureAuthorized(res: Response) {
+  if (isAuthExpired(res.status, res.url || '/api')) {
+    redirectToLogin()
+    throw new ApiError('登录已过期，请重新登录', 401)
+  }
 }
 
 export const api = {

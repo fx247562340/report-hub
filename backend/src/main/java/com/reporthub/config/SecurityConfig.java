@@ -53,6 +53,11 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .headers(h -> h.frameOptions(f -> f.sameOrigin()))
+                .exceptionHandling(e -> e.authenticationEntryPoint((req, res, ex) -> {
+                    res.setStatus(401);
+                    res.setContentType("application/json;charset=UTF-8");
+                    res.getWriter().write("{\"ok\":false,\"error\":\"登录已过期或未登录\",\"data\":null}");
+                }))
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

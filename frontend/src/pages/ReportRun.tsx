@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useRef } from 'react'
-import { api, getUser } from '../api/client'
+import { api, ensureAuthorized, getUser } from '../api/client'
 import Icon from '../components/Icon'
 import EmptyState from '../components/EmptyState'
 import { TableSkeleton } from '../components/Skeleton'
@@ -133,6 +133,7 @@ export default function ReportRun() {
         },
         body: JSON.stringify({ filters: values }),
       })
+      ensureAuthorized(res)
       if (!res.ok) {
         const text = await res.text()
         let msg = '导出失败'
