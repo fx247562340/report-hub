@@ -20,18 +20,27 @@ Java 21 + Spring Boot 3 · React 18 + Vite · PostgreSQL 16 · Docker Compose
 
 ## 启动
 
-### 生产 / 一键 Docker（推荐）
+### 生产部署（必须 git pull）
+
+线上 `/opt/report_hub` 只接受 **git pull** 更新，禁止 scp/rsync 覆盖代码。
 
 ```bash
-cd report_hub
-docker compose up -d --build
+# 本地：改动提交并推到 main
+git add -A && git commit -m "..." && git push origin main
+
+# 线上：拉取并重建（不删 pgdata）
+ssh root@服务器
+cd /opt/report_hub
+./scripts/deploy.sh
 ```
+
+`scripts/deploy.sh` 会校验工作区干净 → `git pull --ff-only` → `docker compose up -d --build` → 健康检查。
 
 | 服务 | 地址 |
 |------|------|
-| 前端 Nginx | http://localhost:15173 |
-| API | http://localhost:18080 |
-| PostgreSQL | localhost:15433 |
+| 前端 Nginx | http://服务器IP:15173 |
+| API | 经 Nginx 反代 `/api`（不对公网映射） |
+| PostgreSQL | 仅 compose 内网 |
 
 包含三个容器：`report-hub-web`（前端+反代）· `report-hub-api`（Spring Boot）· `report-hub-pg`（PostgreSQL）。
 
@@ -39,10 +48,10 @@ docker compose up -d --build
 docker compose ps
 docker compose logs -f api
 docker compose down          # 停止（数据在 pgdata 卷）
-docker compose down -v       # 停止并清库
+docker compose down -v       # 停止并清库（生产禁用）
 ```
 
-环境变量（可选）：`WEB_PORT` `API_PORT` `PG_PORT` `DB_PASSWORD` `JWT_SECRET` `CORS_ORIGINS`
+环境变量（可选）：`WEB_PORT` `DB_PASSWORD` `JWT_SECRET` `CORS_ORIGINS`
 
 ### 本地开发
 
