@@ -194,22 +194,22 @@ export default function ReportRun() {
 
   return (
     <>
-      <div className="page-head">
-        <div className="row" style={{ gap: 14 }}>
-          <div className="icon-tile"><Icon name="report" size={22} /></div>
-          <div>
+      <div className="page-head compact">
+        <div className="row" style={{ gap: 12, minWidth: 0 }}>
+          <div className="icon-tile sm"><Icon name="report" size={18} /></div>
+          <div style={{ minWidth: 0 }}>
             <h1>{meta?.name || code}</h1>
-            <p>{meta?.description || '多源数据实时关联查询'}</p>
+            <p className="one-line">{meta?.description || '多源数据实时关联查询'}</p>
           </div>
         </div>
         <div className="row">
-          <Link className="btn" to="/reports"><Icon name="arrowLeft" size={14} />返回列表</Link>
-          <button className="btn" onClick={exportExcel} disabled={exporting || loading}>
-            <Icon name="download" size={14} />
+          <Link className="btn sm" to="/reports"><Icon name="arrowLeft" size={13} />返回列表</Link>
+          <button className="btn sm" onClick={exportExcel} disabled={exporting || loading}>
+            <Icon name="download" size={13} />
             {exporting ? '导出中…' : '导出 Excel'}
           </button>
-          <button className="btn primary" onClick={() => run(1)} disabled={loading}>
-            <Icon name="play" size={14} />
+          <button className="btn sm primary" onClick={() => run(1)} disabled={loading}>
+            <Icon name="play" size={13} />
             {loading ? '查询中…' : '执行查询'}
           </button>
         </div>
@@ -217,14 +217,14 @@ export default function ReportRun() {
 
       {error && <div className="error-banner">{error}</div>}
 
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="toolbar" style={{ marginBottom: 0 }}>
+      <div className="report-filter-bar">
+        <div className="report-filters">
           {filtersDef.map((f) => {
             const val = values[f.key]
             const isRange = f.op === 'date_range' || f.type === 'date_range' || (val && typeof val === 'object')
             return (
-              <div className="row" key={f.key}>
-                <span className="muted" style={{ fontSize: 12 }}>{f.label || f.key}</span>
+              <div className="filter-item" key={f.key}>
+                <span className="muted">{f.label || f.key}</span>
                 {isRange ? (
                   <>
                     <DateInput
@@ -262,23 +262,10 @@ export default function ReportRun() {
           })}
           {filtersDef.length === 0 && <span className="muted">无筛选条件</span>}
         </div>
-      </div>
-
-      <div className="metrics" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        <div className="card metric">
-          <div className="label"><span>结果行数</span></div>
-          <div className="value">{total}</div>
-          <div className="hint">关联汇总后的行数</div>
-        </div>
-        <div className="card metric">
-          <div className="label"><span>耗时</span></div>
-          <div className="value">{durationMs}<span style={{ fontSize: 14 }}> ms</span></div>
-          <div className="hint">含上游接口调用</div>
-        </div>
-        <div className="card metric">
-          <div className="label"><span>上游调用</span></div>
-          <div className="value">{trace.length}</div>
-          <div className="hint">主表 + 各关联取数</div>
+        <div className="report-stats">
+          <span className="stat-chip"><i>行数</i><b>{total.toLocaleString()}</b></span>
+          <span className="stat-chip"><i>耗时</i><b>{durationMs} ms</b></span>
+          <span className="stat-chip"><i>调用</i><b>{trace.length}</b></span>
         </div>
       </div>
 
@@ -320,9 +307,9 @@ export default function ReportRun() {
           <b>{total.toLocaleString()}</b>
         </div>
         <div className="pager-meta">
-          <span>每页行数</span>
+          <span>每页</span>
           <select
-            className="select"
+            className="select pager-size"
             value={String(pageSize)}
             onChange={(e) => {
               const n = Number(e.target.value)
@@ -382,10 +369,10 @@ export default function ReportRun() {
           </button>
         </div>
         {showJump && (
-          <div className="pager-meta">
+          <div className="pager-meta pager-jump">
             <span>跳至</span>
             <input
-              className="input"
+              className="input pager-input"
               value={pageInput}
               onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ''))}
               onKeyDown={(e) => {

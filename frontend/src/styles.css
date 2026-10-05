@@ -500,6 +500,90 @@ button, input, select, textarea {
 }
 
 /* ===== report result: fixed frame + inner scroll + sticky pager ===== */
+.page-head.compact {
+  margin-bottom: 12px;
+  align-items: center;
+}
+.page-head.compact h1 {
+  font-size: 22px;
+  line-height: 1.2;
+}
+.page-head.compact p.one-line {
+  margin: 2px 0 0;
+  font-size: 12px;
+  max-width: 720px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.icon-tile.sm {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+
+.report-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.report-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.report-filters .filter-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.report-filters .input,
+.report-filters .select {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.report-filters .date-field .input {
+  width: 138px;
+}
+.report-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--panel-2);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.stat-chip b {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.stat-chip i {
+  font-style: normal;
+  color: var(--muted-2);
+}
+
 .report-result {
   display: flex;
   flex-direction: column;
@@ -507,14 +591,14 @@ button, input, select, textarea {
   border-radius: var(--radius);
   background: var(--panel);
   overflow: hidden;
-  margin-bottom: 12px;
-  min-height: 320px;
+  margin-bottom: 8px;
+  min-height: 280px;
   width: 100%;
 }
 .report-result .table-wrap {
   flex: 1 1 auto;
-  min-height: 280px;
-  max-height: calc(100vh - 420px);
+  min-height: 240px;
+  max-height: calc(100vh - 320px);
   border: 0;
   border-radius: 0;
   overflow: auto;
@@ -530,54 +614,68 @@ button, input, select, textarea {
   z-index: 2;
   background: var(--panel);
   box-shadow: 0 1px 0 var(--border-soft);
+  padding: 10px 12px;
 }
 .report-result .table-wrap td {
   background: var(--panel);
+  padding: 10px 12px;
 }
 .report-pager {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 10px 16px;
-  padding: 10px 2px 6px;
+  flex-wrap: nowrap;
+  gap: 8px 10px;
+  padding: 6px 2px 2px;
   position: sticky;
   bottom: 0;
   z-index: 5;
-  background: linear-gradient(180deg, transparent, var(--bg) 28%);
+  background: linear-gradient(180deg, transparent, var(--bg) 30%);
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  white-space: nowrap;
+  scrollbar-width: thin;
 }
 .report-pager .pager-meta {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
+  flex-shrink: 0;
 }
 .report-pager .pager-meta b {
   color: var(--text);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-.report-pager .select {
+.report-pager .select,
+.report-pager .pager-size {
   width: auto;
-  min-width: 88px;
-  height: 34px;
+  min-width: 64px;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+  flex-shrink: 0;
 }
 .report-pager .pager-pages {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  flex-shrink: 0;
 }
 .report-pager .pager-btn {
-  min-width: 34px;
-  height: 34px;
-  padding: 0 10px;
-  border-radius: 10px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
+  flex-shrink: 0;
 }
 .report-pager .pager-btn:hover:not(:disabled) {
   color: var(--text);
@@ -596,11 +694,19 @@ button, input, select, textarea {
 .report-pager .pager-ellipsis {
   color: var(--muted);
   padding: 0 2px;
+  flex-shrink: 0;
 }
+.report-pager .pager-input,
 .report-pager .input {
-  width: 56px;
+  width: 48px;
   text-align: center;
-  height: 34px;
+  height: 30px;
+  padding: 0 6px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.report-pager .pager-jump {
+  flex-shrink: 0;
 }
 
 table {
