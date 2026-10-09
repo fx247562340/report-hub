@@ -129,6 +129,21 @@ $fn$,
     "label": "月份",
     "op": "month",
     "options": []
+  },
+  {
+    "key": "diff_flag",
+    "label": "是否一致",
+    "op": "select",
+    "options": [
+      {
+        "value": "一致",
+        "label": "一致"
+      },
+      {
+        "value": "不一致",
+        "label": "不一致"
+      }
+    ]
   }
 ]
 $ff$,

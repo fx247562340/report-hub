@@ -66,13 +66,19 @@ public class ReportQueryEngine {
         List<TraceCall> trace = new ArrayList<>();
         List<FieldRuleBundle> bundles = loadRules();
 
-        RootFetch rootFetch = fetchRoot(report, req, trace, bundles);
+        // 计算列筛选（如 是否一致）必须全量取数后本地过滤，否则只会滤到当前上游页
+        boolean localCalcFilter = hasLocalCalcFilter(report, req.filters());
+        QueryRequest fetchReq = localCalcFilter
+                ? new QueryRequest(req.filters(), 1, Math.max(req.pageSize(), props.getEngine().getMaxRootRows()))
+                : req;
+
+        RootFetch rootFetch = fetchRoot(report, fetchReq, trace, bundles);
         Dataset root = rootFetch.dataset();
         List<RelationDef> relations = relationRepo.findByReportCodeOrderBySortAsc(report.getCode());
 
         Dataset current = root;
         for (RelationDef rel : relations) {
-            Dataset right = fetchRelated(rel, current, req, trace, bundles);
+            Dataset right = fetchRelated(rel, current, fetchReq, trace, bundles);
             current = join(current, right, rel);
         }
 
@@ -81,12 +87,31 @@ public class ReportQueryEngine {
         List<Map<String, Object>> all = applyInMemoryFilters(projected, req.filters());
         sortRows(all, report);
 
-        // 分页总条数优先取主表上游 count（totalPath），避免写死/只按本页行数
-        long total = rootFetch.upstreamTotal() != null ? rootFetch.upstreamTotal() : all.size();
-        List<Map<String, Object>> pageRows = all;
+        long total;
+        List<Map<String, Object>> pageRows;
+        if (localCalcFilter) {
+            total = all.size();
+            pageRows = paginate(all, req.page(), req.pageSize());
+        } else {
+            // 分页总条数优先取主表上游 count（totalPath）
+            total = rootFetch.upstreamTotal() != null ? rootFetch.upstreamTotal() : all.size();
+            pageRows = all;
+        }
 
         return new QueryResult(parseResultColumns(report), pageRows, req.page(), req.pageSize(), total,
                 trace, System.currentTimeMillis() - t0);
+    }
+
+    /** 是否有落在计算列上的本地筛选（精确值，非日期范围） */
+    private boolean hasLocalCalcFilter(ReportDef report, Map<String, Object> filters) {
+        if (filters == null || filters.isEmpty()) return false;
+        for (CalcEvaluator.CalcField calc : parseCalcs(report)) {
+            Object v = filters.get(calc.key());
+            if (v == null || v instanceof Map) continue;
+            String fv = String.valueOf(v);
+            if (!fv.isBlank()) return true;
+        }
+        return false;
     }
 
     private record RootFetch(Dataset dataset, Long upstreamTotal) {}
@@ -457,7 +482,9 @@ public class ReportQueryEngine {
                 // only filter when this key exists on the projected row (upstream-only binds are ignored)
                 if (!row.containsKey(f.getKey())) continue;
                 Object cell = row.get(f.getKey());
-                if (cell == null || !String.valueOf(cell).contains(fv)) {
+                String cv = cell == null ? null : String.valueOf(cell);
+                // 精确匹配：避免「一致」误命中「不一致」
+                if (cv == null || !cv.equals(fv)) {
                     ok = false;
                     break;
                 }
