@@ -514,6 +514,7 @@ export default function Reports() {
                       <select className="select" value={f.op}
                         onChange={(e) => setFilters(filters.map((x, i) => (i === idx ? { ...x, op: e.target.value } : x)))}>
                         <option value="date_range">日期范围</option>
+                        <option value="month">月份</option>
                         <option value="select">下拉选项</option>
                         <option value="contains">文本包含</option>
                         <option value="eq">精确匹配</option>

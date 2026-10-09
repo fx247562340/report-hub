@@ -10,6 +10,49 @@ type Col = { key: string; label: string; from?: string }
 type Filter = { key: string; label: string; op?: string; type?: string; options?: { value: string; label: string }[] }
 type Trace = { mode: string; endpoint: string; url: string; rows: number; ms: number }
 
+function monthKey(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function monthRange(yyyyMm: string) {
+  const m = /^(\d{4})-(\d{2})$/.exec(yyyyMm || '')
+  if (!m) return { start: '', end: '' }
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const last = new Date(y, mo, 0).getDate()
+  return { start: `${yyyyMm}-01`, end: `${yyyyMm}-${String(last).padStart(2, '0')}` }
+}
+
+function buildMonthOptions() {
+  const out: { value: string; label: string }[] = []
+  const now = new Date()
+  for (let i = 0; i < 24; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    const key = monthKey(d)
+    out.push({ value: key, label: `${key} 月` })
+  }
+  return out
+}
+
+/** 查询前统一加工筛选：状态固定白件已称重，月份展开为起止日期 */
+function buildQueryFilters(values: Record<string, any>) {
+  const filters: Record<string, any> = { ...values, work_status: '12' }
+  for (const [k, v] of Object.entries(values)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      filters[k] = v
+      continue
+    }
+    if (typeof v === 'string' && /^\d{4}-\d{2}$/.test(v)) {
+      filters[k] = monthRange(v)
+    }
+  }
+  // 显式月份字段（op=month）值为 YYYY-MM
+  if (typeof values.endImmersionTime === 'string' && /^\d{4}-\d{2}$/.test(values.endImmersionTime)) {
+    filters.endImmersionTime = monthRange(values.endImmersionTime)
+  }
+  return filters
+}
+
 const MODE_LABEL: Record<string, string> = {
   root: '主表',
   dual_list: '双侧列表',
@@ -103,10 +146,12 @@ export default function ReportRun() {
   const defaultFilters = useMemo(() => {
     const init: Record<string, any> = {}
     for (const f of filtersDef) {
-      if (f.op === 'date_range' || f.type === 'date_range') {
+      if (f.op === 'month' || f.type === 'month') {
+        init[f.key] = monthKey(new Date())
+      } else if (f.op === 'date_range' || f.type === 'date_range') {
         init[f.key] = { start: '', end: '' }
       } else {
-        init[f.key] = ''
+        init[f.key] = f.op === 'select' || f.type === 'select' ? '' : ''
       }
     }
     return init
@@ -121,7 +166,7 @@ export default function ReportRun() {
     setError('')
     setPageInput(String(nextPage))
     try {
-      const body = { filters: values, page: nextPage, pageSize: size }
+      const body = { filters: buildQueryFilters(values), page: nextPage, pageSize: size }
       const result = isAdmin
         ? await api.post<any>(`/api/reports/${code}/debug`, body)
         : await api.post<any>(`/api/reports/${code}/query`, body)
@@ -149,7 +194,7 @@ export default function ReportRun() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ filters: values }),
+        body: JSON.stringify({ filters: buildQueryFilters(values) }),
       })
       ensureAuthorized(res)
       if (!res.ok) {
@@ -221,11 +266,22 @@ export default function ReportRun() {
         <div className="report-filters">
           {filtersDef.map((f) => {
             const val = values[f.key]
-            const isRange = f.op === 'date_range' || f.type === 'date_range' || (val && typeof val === 'object')
+            const isMonth = f.op === 'month' || f.type === 'month'
+            const isRange = !isMonth && (f.op === 'date_range' || f.type === 'date_range' || (val && typeof val === 'object'))
             return (
               <div className="filter-item" key={f.key}>
                 <span className="muted">{f.label || f.key}</span>
-                {isRange ? (
+                {isMonth ? (
+                  <select
+                    className="select"
+                    value={val || monthKey(new Date())}
+                    onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                  >
+                    {buildMonthOptions().map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                ) : isRange ? (
                   <>
                     <DateInput
                       value={val?.start || ''}
