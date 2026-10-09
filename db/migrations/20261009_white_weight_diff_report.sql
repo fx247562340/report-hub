@@ -71,6 +71,11 @@ VALUES (
     "from": "ds_hang.item_code"
   },
   {
+    "key": "black_weight",
+    "label": "MES黑件重量(kg)",
+    "from": "ds_hang.black_weight"
+  },
+  {
     "key": "white_weight",
     "label": "MES白件重量(kg)",
     "from": "ds_hang.white_weight"
