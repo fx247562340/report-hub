@@ -144,6 +144,14 @@ $fn$,
         "label": "不一致"
       }
     ]
+  },
+  {
+    "key": "work_status",
+    "label": "挂次状态",
+    "op": "eq",
+    "hidden": true,
+    "defaultValue": "12",
+    "options": []
   }
 ]
 $ff$,

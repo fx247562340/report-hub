@@ -7,7 +7,17 @@ import EmptyState from '../components/EmptyState'
 import { TableSkeleton } from '../components/Skeleton'
 
 type Col = { key: string; label: string; from?: string }
-type Filter = { key: string; label: string; op?: string; type?: string; options?: { value: string; label: string }[] }
+type Filter = {
+  key: string
+  label: string
+  op?: string
+  type?: string
+  options?: { value: string; label: string }[]
+  /** 不在界面展示，但会带给查询 */
+  hidden?: boolean
+  /** hidden 筛选的固定/默认值 */
+  defaultValue?: string
+}
 type Trace = { mode: string; endpoint: string; url: string; rows: number; ms: number }
 
 function monthKey(d: Date) {
@@ -34,9 +44,14 @@ function buildMonthOptions() {
   return out
 }
 
-/** 查询前统一加工筛选：状态固定白件已称重，月份展开为起止日期 */
-function buildQueryFilters(values: Record<string, any>) {
-  const filters: Record<string, any> = { ...values, work_status: '12' }
+/** 查询前统一加工筛选：月份展开为起止日期；hidden 筛选用固定值 */
+function buildQueryFilters(values: Record<string, any>, filtersDef: Filter[]) {
+  const filters: Record<string, any> = { ...values }
+  for (const f of filtersDef) {
+    if (f.hidden && f.defaultValue != null && f.defaultValue !== '') {
+      filters[f.key] = f.defaultValue
+    }
+  }
   for (const [k, v] of Object.entries(values)) {
     if (v && typeof v === 'object' && !Array.isArray(v)) {
       filters[k] = v
@@ -45,10 +60,6 @@ function buildQueryFilters(values: Record<string, any>) {
     if (typeof v === 'string' && /^\d{4}-\d{2}$/.test(v)) {
       filters[k] = monthRange(v)
     }
-  }
-  // 显式月份字段（op=month）值为 YYYY-MM
-  if (typeof values.endImmersionTime === 'string' && /^\d{4}-\d{2}$/.test(values.endImmersionTime)) {
-    filters.endImmersionTime = monthRange(values.endImmersionTime)
   }
   return filters
 }
@@ -146,12 +157,16 @@ export default function ReportRun() {
   const defaultFilters = useMemo(() => {
     const init: Record<string, any> = {}
     for (const f of filtersDef) {
+      if (f.hidden) {
+        init[f.key] = f.defaultValue ?? ''
+        continue
+      }
       if (f.op === 'month' || f.type === 'month') {
         init[f.key] = monthKey(new Date())
       } else if (f.op === 'date_range' || f.type === 'date_range') {
         init[f.key] = { start: '', end: '' }
       } else {
-        init[f.key] = f.op === 'select' || f.type === 'select' ? '' : ''
+        init[f.key] = ''
       }
     }
     return init
@@ -166,7 +181,7 @@ export default function ReportRun() {
     setError('')
     setPageInput(String(nextPage))
     try {
-      const body = { filters: buildQueryFilters(values), page: nextPage, pageSize: size }
+      const body = { filters: buildQueryFilters(values, filtersDef), page: nextPage, pageSize: size }
       const result = isAdmin
         ? await api.post<any>(`/api/reports/${code}/debug`, body)
         : await api.post<any>(`/api/reports/${code}/query`, body)
@@ -194,7 +209,7 @@ export default function ReportRun() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ filters: buildQueryFilters(values) }),
+        body: JSON.stringify({ filters: buildQueryFilters(values, filtersDef) }),
       })
       ensureAuthorized(res)
       if (!res.ok) {
@@ -264,7 +279,7 @@ export default function ReportRun() {
 
       <div className="report-filter-bar">
         <div className="report-filters">
-          {filtersDef.map((f) => {
+          {filtersDef.filter((f) => !f.hidden).map((f) => {
             const val = values[f.key]
             const isMonth = f.op === 'month' || f.type === 'month'
             const isRange = !isMonth && (f.op === 'date_range' || f.type === 'date_range' || (val && typeof val === 'object'))
