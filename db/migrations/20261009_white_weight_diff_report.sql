@@ -35,7 +35,7 @@ INSERT INTO reports (code, name, description, root_dataset, enabled, fields_json
 VALUES (
   'rpt_white_weight_diff',
   '挂次白件重量差异表',
-  'MES挂次（白件已称重）× U9完工报告，按月对比白件重量与完工/入库数量（U9吨×1000）',
+  'MES挂次完工列表 × U9完工报告，按月对比白件重量与完工/入库数量（U9吨×1000）',
   'ds_hang',
   true,
   $fn$
@@ -131,6 +131,37 @@ $fn$,
     "options": []
   },
   {
+    "key": "work_status",
+    "label": "挂次状态",
+    "op": "select",
+    "options": [
+      {
+        "value": "12",
+        "label": "白件已称重"
+      },
+      {
+        "value": "1",
+        "label": "未酸洗"
+      },
+      {
+        "value": "2",
+        "label": "已酸洗"
+      },
+      {
+        "value": "3",
+        "label": "已称重"
+      },
+      {
+        "value": "4",
+        "label": "已浸锌"
+      },
+      {
+        "value": "5",
+        "label": "已完成"
+      }
+    ]
+  },
+  {
     "key": "diff_flag",
     "label": "是否一致",
     "op": "select",
@@ -144,14 +175,6 @@ $fn$,
         "label": "不一致"
       }
     ]
-  },
-  {
-    "key": "work_status",
-    "label": "挂次状态",
-    "op": "eq",
-    "hidden": true,
-    "defaultValue": "12",
-    "options": []
   }
 ]
 $ff$,
