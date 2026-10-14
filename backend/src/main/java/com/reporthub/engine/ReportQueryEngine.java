@@ -215,8 +215,10 @@ public class ReportQueryEngine {
         if (pairs.isEmpty()) throw new BizException("relation onFields empty: " + rel.getCode());
 
         LinkedHashSet<String> keys = new LinkedHashSet<>();
+        // fetch key 可与 join 字段不同（如按销售订单拉领号任务，再按工单号关联）
+        String keyField = str(cfg, "keyField", pairs.get(0).leftField());
         for (Map<String, Object> row : left.rows()) {
-            String k = JsonPaths.normKey(resolve(row, rel.getLeftDataset(), pairs.get(0).leftField()));
+            String k = JsonPaths.normKey(resolve(row, rel.getLeftDataset(), keyField));
             if (!k.isEmpty()) keys.add(k);
         }
 
@@ -345,14 +347,18 @@ public class ReportQueryEngine {
                     .map(p -> JsonPaths.normKey(resolve(l, leftDs, p.leftField())))
                     .collect(Collectors.joining("||"));
             List<Map<String, Object>> matches = index.getOrDefault(k, List.of());
+            String countKey = rightDs + ".__count";
             if (matches.isEmpty()) {
                 if ("inner".equalsIgnoreCase(rel.getJoinType())) continue;
-                out.addRow(new LinkedHashMap<>(l));
+                Map<String, Object> empty = new LinkedHashMap<>(l);
+                empty.put(countKey, 0);
+                out.addRow(empty);
                 continue;
             }
             if (!toMany) {
                 Map<String, Object> row = new LinkedHashMap<>(l);
                 mergeRight(row, matches.get(0), rightDs);
+                row.put(countKey, matches.size());
                 out.addRow(row);
             } else if (nested) {
                 Map<String, Object> row = new LinkedHashMap<>(l);
@@ -363,11 +369,13 @@ public class ReportQueryEngine {
                     children.add(child);
                 }
                 row.put(rightDs + ".__list", children);
+                row.put(countKey, matches.size());
                 out.addRow(row);
             } else {
                 for (Map<String, Object> c : matches) {
                     Map<String, Object> row = new LinkedHashMap<>(l);
                     mergeRight(row, c, rightDs);
+                    row.put(countKey, matches.size());
                     out.addRow(row);
                 }
             }
