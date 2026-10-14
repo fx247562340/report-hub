@@ -326,6 +326,95 @@ public class ReportQueryEngine {
         }
     }
 
+    /** 按主表一行拉取各关联子列表（弹窗明细）。keys 为投影后的行字段。 */
+    public Map<String, Object> children(ReportDef report, Map<String, Object> row) {
+        List<TraceCall> trace = new ArrayList<>();
+        List<FieldRuleBundle> bundles = loadRules();
+        List<RelationDef> relations = relationRepo.findByReportCodeOrderBySortAsc(report.getCode());
+        String root = report.getRootDataset();
+
+        Map<String, Object> labeled = new LinkedHashMap<>();
+        if (row != null) {
+            row.forEach((k, v) -> {
+                if (v == null) return;
+                labeled.put(k, v);
+                labeled.put(root + "." + k, v);
+            });
+        }
+        // 投影行不含 join_key/cmd_key，按约定回填
+        if (!labeled.containsKey("join_key") && labeled.get("order_no") != null) {
+            String k = String.valueOf(labeled.get("order_no")).trim().toLowerCase();
+            labeled.put("join_key", k);
+            labeled.put(root + ".join_key", k);
+        }
+        if (!labeled.containsKey("cmd_key") && labeled.get("order_command_no") != null) {
+            String k = String.valueOf(labeled.get("order_command_no")).trim().toLowerCase();
+            labeled.put("cmd_key", k);
+            labeled.put(root + ".cmd_key", k);
+        }
+
+        Dataset left = new Dataset(root);
+        left.addRow(labeled);
+
+        QueryRequest dummy = QueryRequest.of(Map.of(), 1, 50);
+        List<Map<String, Object>> lists = new ArrayList<>();
+        for (RelationDef rel : relations) {
+            Dataset right = fetchRelated(rel, left, dummy, trace, bundles);
+            String ds = rel.getRightDataset();
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (Map<String, Object> r : right.rows()) {
+                Map<String, Object> plain = new LinkedHashMap<>();
+                r.forEach((k, v) -> {
+                    if (k.startsWith(ds + ".")) {
+                        plain.putIfAbsent(k.substring(ds.length() + 1), v);
+                    } else if (!k.contains(".")) {
+                        plain.putIfAbsent(k, v);
+                    }
+                });
+                plain.remove("match_key");
+                plain.remove("join_key");
+                plain.remove("cmd_key");
+                plain.remove("__list");
+                plain.remove("__count");
+                rows.add(plain);
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("code", rel.getCode());
+            item.put("rightDataset", ds);
+            item.put("count", rows.size());
+            item.put("columns", detailColumns(rel));
+            item.put("rows", rows);
+            lists.add(item);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("lists", lists);
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> detailColumns(RelationDef rel) {
+        try {
+            Map<String, Object> cfg = readJsonMap(rel.getFetchConfig());
+            Object cols = cfg.get("detailColumns");
+            if (cols instanceof List<?> list) {
+                List<Map<String, Object>> out = new ArrayList<>();
+                for (Object o : list) {
+                    if (o instanceof Map<?, ?> m) {
+                        Map<String, Object> c = new LinkedHashMap<>();
+                        Object key = m.get("key");
+                        Object label = m.get("label");
+                        c.put("key", String.valueOf(key));
+                        c.put("label", String.valueOf(label != null ? label : key));
+                        out.add(c);
+                    }
+                }
+                return out;
+            }
+        } catch (Exception ignored) {
+        }
+        return List.of();
+    }
+
     private Dataset join(Dataset left, Dataset right, RelationDef rel) {
         List<JoinPair> pairs = parseOn(rel.getOnFields());
         boolean toMany = "1-N".equals(rel.getCardinality()) || "N-N".equals(rel.getCardinality());

@@ -6,7 +6,7 @@ import Icon from '../components/Icon'
 import EmptyState from '../components/EmptyState'
 import { TableSkeleton } from '../components/Skeleton'
 
-type Col = { key: string; label: string; from?: string }
+type Col = { key: string; label: string; from?: string; link?: string }
 type Filter = {
   key: string
   label: string
@@ -119,6 +119,10 @@ export default function ReportRun() {
   const [pageOpt, setPageOpt] = useState<number[]>([20, 50, 100, 200])
   const [showJump, setShowJump] = useState(true)
   const [pageInput, setPageInput] = useState('1')
+  const [detailRow, setDetailRow] = useState<any | null>(null)
+  const [detailData, setDetailData] = useState<any>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
 
   const pageCount = Math.max(1, Math.ceil(total / Math.max(1, pageSize)))
   const pagerItems = useMemo(() => {
@@ -252,6 +256,31 @@ export default function ReportRun() {
     })
   }
 
+  async function openDetail(row: any) {
+    setDetailRow(row)
+    setDetailData(null)
+    setDetailError('')
+    setDetailLoading(true)
+    try {
+      const data = await api.post<any>(`/api/reports/${code}/children`, { row })
+      setDetailData(data)
+    } catch (e: any) {
+      setDetailError(e.message)
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
+  const DETAIL_TITLE: Record<string, string> = {
+    rel_crm_so_mo: '生产订单',
+    rel_mo_mes_erp_order: 'MES领号任务',
+    rel_crm_so_mes_card: 'MES流动卡',
+  }
+
+  function isCountCol(c: Col) {
+    return !!c.link || /_count$|_num$|数量|张数|条数|工单数/.test(c.key + (c.label || ''))
+  }
+
   return (
     <>
       <div className="page-head compact">
@@ -349,14 +378,33 @@ export default function ReportRun() {
             <thead>
               <tr>
                 {columns.map((c) => <th key={c.key}>{c.label || c.key}</th>)}
+                <th style={{ width: 72 }}>明细</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row, idx) => (
                 <tr key={idx}>
                   {columns.map((c) => (
-                    <td key={c.key}>{row[c.key] ?? '-'}</td>
+                    <td key={c.key}>
+                      {isCountCol(c) ? (
+                        <button
+                          type="button"
+                          className="link-count"
+                          title="点击查看明细"
+                          onClick={() => openDetail(row)}
+                        >
+                          {row[c.key] ?? 0}
+                        </button>
+                      ) : (
+                        row[c.key] ?? '-'
+                      )}
+                    </td>
                   ))}
+                  <td>
+                    <button type="button" className="btn sm" onClick={() => openDetail(row)}>
+                      明细
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -481,6 +529,61 @@ export default function ReportRun() {
             </div>
           ))}
           {trace.length === 0 && <EmptyState compact variant="config" title="执行查询后展示" />}
+        </div>
+      )}
+
+      {detailRow && (
+        <div className="modal-backdrop" onClick={() => setDetailRow(null)}>
+          <div className="modal" style={{ width: 'min(920px, 100%)' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h3>明细 · {detailRow.order_no || detailRow.order_command_no || ''}</h3>
+                <div className="sub">
+                  项目号 {detailRow.order_command_no || '-'} · 客户 {detailRow.customer_name || '-'}
+                </div>
+              </div>
+              <button className="btn sm" onClick={() => setDetailRow(null)}>关闭</button>
+            </div>
+            <div className="modal-body">
+              {detailLoading && <div className="muted">加载明细…</div>}
+              {detailError && <div className="error-banner">{detailError}</div>}
+              {!detailLoading && !detailError && detailData?.lists?.map((lst: any) => (
+                <div key={lst.code} style={{ marginBottom: 18 }}>
+                  <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+                    <h4 style={{ margin: 0 }}>{DETAIL_TITLE[lst.code] || lst.rightDataset || lst.code}</h4>
+                    <span className="stat-chip"><i>条数</i><b>{lst.count ?? lst.rows?.length ?? 0}</b></span>
+                  </div>
+                  {(!lst.rows || lst.rows.length === 0) ? (
+                    <div className="muted">无数据</div>
+                  ) : (
+                    <div className="table-wrap" style={{ maxHeight: 260, overflow: 'auto' }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            {(lst.columns?.length ? lst.columns : Object.keys(lst.rows[0] || {}).map(k => ({ key: k, label: k }))).map((c: any) => (
+                              <th key={c.key}>{c.label || c.key}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {lst.rows.map((r: any, i: number) => (
+                            <tr key={i}>
+                              {(lst.columns?.length ? lst.columns : Object.keys(lst.rows[0] || {}).map(k => ({ key: k, label: k }))).map((c: any) => (
+                                <td key={c.key}>{r[c.key] ?? '-'}</td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="modal-footer">
+              <button className="btn sm" onClick={() => setDetailRow(null)}>关闭</button>
+            </div>
+          </div>
         </div>
       )}
     </>

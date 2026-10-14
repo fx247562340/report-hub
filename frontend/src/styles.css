@@ -1734,3 +1734,15 @@ tbody tr:hover { background: rgba(255,255,255,.02); }
 .brand-mark {
   box-shadow: inset 0 0 0 1px rgba(0,0,0,.06), 0 4px 14px rgba(0,0,0,.2);
 }
+
+.link-count {
+  background: none;
+  border: none;
+  color: var(--accent, #2f6fed);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.link-count:hover { opacity: 0.8; }

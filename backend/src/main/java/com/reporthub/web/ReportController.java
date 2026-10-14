@@ -64,6 +64,18 @@ public class ReportController {
         return query(code, body);
     }
 
+    /** 弹窗明细：按主表一行拉取各关联子列表 */
+    @PostMapping("/{code}/children")
+    public ApiResponse<Map<String, Object>> children(
+            @PathVariable String code,
+            @RequestBody(required = false) Map<String, Object> body) {
+        var report = configService.getReport(code);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> row = body == null ? Map.of() :
+                (Map<String, Object>) body.getOrDefault("row", Map.of());
+        return ApiResponse.ok(engine.children(report, row));
+    }
+
     /** Export all filtered rows as xlsx (not just current page). */
     @PostMapping("/{code}/export")
     public org.springframework.http.ResponseEntity<byte[]> export(
