@@ -248,7 +248,13 @@ public class ReportQueryEngine {
                         ctx.put("id", key);
                         ctx.put("key", key);
                         var result = upstream.fetchList(src, ep, ctx);
-                        return upstream.mapAll(result.rawRows(), ruleset);
+                        var mapped = upstream.mapAll(result.rawRows(), ruleset);
+                        // 子响应不一定回传查询键（如 MES orderCode 带 /零件名），补 match_key/join_key 供关联
+                        for (Map<String, Object> row : mapped) {
+                            row.putIfAbsent("match_key", key);
+                            row.putIfAbsent("join_key", JsonPaths.normKey(key).toLowerCase());
+                        }
+                        return mapped;
                     });
                 }
                 List<Map<String, Object>> all = new ArrayList<>();
