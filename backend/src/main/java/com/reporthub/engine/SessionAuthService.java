@@ -100,6 +100,11 @@ public class SessionAuthService {
         String url = joinUrl(ds.getBaseUrl(), loginPath);
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.ACCEPT, "application/json, text/plain, */*");
+        // 可选登录请求头（如 BladeX OAuth 的 Authorization: Basic）
+        Map<String, Object> loginHeaders = asMap(cfg.get("loginHeaders"));
+        loginHeaders.forEach((k, v) -> {
+            if (v != null && !String.valueOf(v).isBlank()) headers.set(String.valueOf(k), String.valueOf(v));
+        });
 
         ResponseEntity<String> resp;
         try {
@@ -186,18 +191,21 @@ public class SessionAuthService {
         }
         Map<String, Object> tokenSpec = asMap(readMap(ds.getAuthConfig()).get("token"));
         if (state.token != null && !tokenSpec.isEmpty()) {
-            String style = str(tokenSpec, "style", "query"); // query | header | bearer | cookie
+            String style = str(tokenSpec, "style", "query"); // query | header | bearer | blade | cookie
             String name = str(tokenSpec, "name", "access_token");
+            String prefix = str(tokenSpec, "prefix", "");
+            String tokenValue = prefix.isEmpty() ? state.token : prefix + state.token;
             switch (style) {
-                case "header" -> headers.set(name, state.token);
+                case "header" -> headers.set(name, tokenValue);
                 case "bearer" -> headers.set(HttpHeaders.AUTHORIZATION, "Bearer " + state.token);
+                case "blade" -> headers.set(str(tokenSpec, "name", "Blade-Auth"), "bearer " + state.token);
                 case "cookie" -> {
                     String existing = headers.getFirst(HttpHeaders.COOKIE);
-                    String cookie = (existing == null || existing.isBlank() ? "" : existing + "; ") + name + "=" + state.token;
+                    String cookie = (existing == null || existing.isBlank() ? "" : existing + "; ") + name + "=" + tokenValue;
                     headers.set(HttpHeaders.COOKIE, cookie);
                 }
                 default -> {
-                    if (query != null) query.put(name, state.token);
+                    if (query != null) query.put(name, tokenValue);
                 }
             }
         }
@@ -236,6 +244,17 @@ public class SessionAuthService {
         String type = str(success, "type", "auto");
         if ("status".equalsIgnoreCase(type)) {
             return resp.getStatusCode().is2xxSuccessful();
+        }
+        // 关键字段非空即视为登录成功（BladeX token 响应无 code）
+        if ("not_empty".equalsIgnoreCase(type)) {
+            String path = str(success, "path", "access_token");
+            try {
+                JsonNode root = mapper.readTree(resp.getBody() == null ? "{}" : resp.getBody());
+                Object v = JsonPaths.read(root, path);
+                return v != null && !String.valueOf(v).isBlank() && !"null".equals(String.valueOf(v));
+            } catch (Exception e) {
+                return false;
+            }
         }
         String body = resp.getBody() == null ? "" : resp.getBody();
         if ("json_code".equalsIgnoreCase(type) || "auto".equalsIgnoreCase(type) || type.isBlank()) {
