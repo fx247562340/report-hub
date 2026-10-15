@@ -76,10 +76,35 @@ public class ReportQueryEngine {
         Dataset root = rootFetch.dataset();
         List<RelationDef> relations = relationRepo.findByReportCodeOrderBySortAsc(report.getCode());
 
+        // 各子表都按主表键取数，可并行拉完再按顺序 join
+        List<Dataset> rights = new ArrayList<>();
+        if (relations.isEmpty()) {
+            // no-op
+        } else if (relations.size() == 1) {
+            rights.add(fetchRelated(relations.get(0), root, fetchReq, trace, bundles));
+        } else {
+            List<CompletableFuture<Dataset>> futures = new ArrayList<>();
+            ExecutorService pool = Executors.newFixedThreadPool(Math.min(relations.size(), 4));
+            try {
+                for (RelationDef rel : relations) {
+                    futures.add(CompletableFuture.supplyAsync(
+                            () -> fetchRelated(rel, root, fetchReq, trace, bundles), pool));
+                }
+                for (CompletableFuture<Dataset> f : futures) {
+                    rights.add(f.join());
+                }
+            } catch (CompletionException e) {
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                if (cause instanceof RuntimeException re) throw re;
+                throw new BizException("related fetch failed: " + cause.getMessage(), HttpStatus.BAD_GATEWAY);
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+
         Dataset current = root;
-        for (RelationDef rel : relations) {
-            Dataset right = fetchRelated(rel, current, fetchReq, trace, bundles);
-            current = join(current, right, rel);
+        for (int i = 0; i < relations.size(); i++) {
+            current = join(current, rights.get(i), relations.get(i));
         }
 
         List<Map<String, Object>> projected = project(current, report);
@@ -252,9 +277,21 @@ public class ReportQueryEngine {
                         var result = upstream.fetchList(src, ep, ctx);
                         var mapped = upstream.mapAll(result.rawRows(), ruleset);
                         // 子响应不一定回传查询键（如 MES orderCode 带 /零件名），补 match_key/join_key 供关联
+                        Integer total = result.total();
                         for (Map<String, Object> row : mapped) {
                             row.putIfAbsent("match_key", key);
                             row.putIfAbsent("join_key", JsonPaths.normKey(key).toLowerCase());
+                            if (total != null) row.put("__fetch_total", total);
+                        }
+                        // size=1 时 mapped 可能为空，但仍需 count=total
+                        if (mapped.isEmpty() && total != null && total > 0) {
+                            Map<String, Object> stub = new LinkedHashMap<>();
+                            stub.put("match_key", key);
+                            stub.put("join_key", JsonPaths.normKey(key).toLowerCase());
+                            stub.put("__fetch_total", total);
+                            mapped.add(stub);
+                        } else if (mapped.isEmpty()) {
+                            // keep empty
                         }
                         return mapped;
                     });
@@ -437,6 +474,14 @@ public class ReportQueryEngine {
                     .collect(Collectors.joining("||"));
             List<Map<String, Object>> matches = index.getOrDefault(k, List.of());
             String countKey = rightDs + ".__count";
+            int matchCount = matches.size();
+            for (Map<String, Object> m : matches) {
+                Object ft = m.get("__fetch_total");
+                if (ft instanceof Number n) {
+                    matchCount = n.intValue();
+                    break;
+                }
+            }
             if (matches.isEmpty()) {
                 if ("inner".equalsIgnoreCase(rel.getJoinType())) continue;
                 Map<String, Object> empty = new LinkedHashMap<>(l);
@@ -447,7 +492,7 @@ public class ReportQueryEngine {
             if (!toMany) {
                 Map<String, Object> row = new LinkedHashMap<>(l);
                 mergeRight(row, matches.get(0), rightDs);
-                row.put(countKey, matches.size());
+                row.put(countKey, matchCount);
                 out.addRow(row);
             } else if (nested) {
                 Map<String, Object> row = new LinkedHashMap<>(l);
@@ -458,13 +503,13 @@ public class ReportQueryEngine {
                     children.add(child);
                 }
                 row.put(rightDs + ".__list", children);
-                row.put(countKey, matches.size());
+                row.put(countKey, matchCount);
                 out.addRow(row);
             } else {
                 for (Map<String, Object> c : matches) {
                     Map<String, Object> row = new LinkedHashMap<>(l);
                     mergeRight(row, c, rightDs);
-                    row.put(countKey, matches.size());
+                    row.put(countKey, matchCount);
                     out.addRow(row);
                 }
             }
