@@ -284,7 +284,7 @@ export default function ZnLedger() {
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>
-          <div className="modal" style={{ width: 'min(720px, 100%)' }} onClick={(e) => e.stopPropagation()}>
+          <div className="modal" style={{ width: 'min(760px, 100%)' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
                 <h3>{editingId ? '修改记录' : '新增录入'}</h3>
@@ -362,27 +362,8 @@ export default function ZnLedger() {
                 </div>
 
                 <div className="zn-sec">备注</div>
-                <input className="input" value={form.note} placeholder="换锅、停线、补加合金锭、称重异常…"
-                  onChange={(e) => setForm({ ...form, note: e.target.value })} />
-              </div>
-
-              <div className="row" style={{ justifyContent: 'space-between', margin: '10px 0 6px' }}>
-                <b style={{ fontSize: 13 }}>加锌明细 · 合计 {fmt(c.add)} kg</b>
-                <button className="btn sm" onClick={() => setAdds([...adds, { t: nowHM(), w: '' }])}>+ 一条</button>
-              </div>
-              {adds.map((a, i) => (
-                <div className="row" key={i} style={{ gap: 8, marginBottom: 6 }}>
-                  <input className="input" style={{ width: 120 }} type="time" value={a.t}
-                    onChange={(e) => setAdds(adds.map((x, j) => (j === i ? { ...x, t: e.target.value } : x)))} />
-                  <input className="input" style={{ width: 160 }} type="number" step="1" placeholder="锌锭净重 kg" value={a.w}
-                    onChange={(e) => setAdds(adds.map((x, j) => (j === i ? { ...x, w: e.target.value } : x)))} />
-                  <button className="btn sm" onClick={() => setAdds(adds.filter((_, j) => j !== i))}>−</button>
-                </div>
-              ))}
-
-              <div className="filter-item" style={{ marginTop: 8 }}>
-                <span className="muted">备注</span>
-                <input className="input" value={form.note} placeholder="换锅、停线、补加合金锭…"
+                <textarea className="textarea zn-note" rows={3} value={form.note}
+                  placeholder="换锅、停线、补加合金锭、称重异常…"
                   onChange={(e) => setForm({ ...form, note: e.target.value })} />
               </div>
 
