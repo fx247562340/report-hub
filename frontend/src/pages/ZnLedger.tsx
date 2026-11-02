@@ -388,7 +388,7 @@ export default function ZnLedger() {
 
               <div style={{
                 marginTop: 12, padding: '10px 12px', borderRadius: 8,
-                border: '1px solid var(--border)', fontVariantNumeric: 'tabular-nums',
+                border: '1px solid var(--border)', background: 'var(--panel)', color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums',
               }}>
                 {isFinite(c.tot) ? (
                   <>
