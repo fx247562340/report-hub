@@ -12,6 +12,7 @@ import Relations from './pages/Relations'
 import Users from './pages/Users'
 import Profile from './pages/Profile'
 import About from './pages/About'
+import ZnLedger from './pages/ZnLedger'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const user = getUser()
@@ -35,6 +36,7 @@ export default function App() {
         <Route index element={<Home />} />
         <Route path="reports" element={<Reports />} />
         <Route path="reports/:code" element={<ReportRun />} />
+        <Route path="zn-ledger" element={<ZnLedger />} />
         <Route path="datasources" element={<Datasources />} />
         <Route path="endpoints" element={<Endpoints />} />
         <Route path="datasets" element={<Datasets />} />
