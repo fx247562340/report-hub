@@ -367,21 +367,30 @@ export default function ZnLedger() {
                   onChange={(e) => setForm({ ...form, note: e.target.value })} />
               </div>
 
-              <div style={{
-                marginTop: 12, padding: '10px 12px', borderRadius: 8,
-                border: '1px solid var(--border)', background: 'var(--panel)', color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums',
-              }}>
-                {isFinite(c.tot) ? (
-                  <>
-                    液面{c.drop >= 0 ? '下降' : '上升'} <b>{fmt(Math.abs(c.drop), 1)}</b> mm × {fmt(c.k, 1)} kg/mm = <b>{fmt(c.lv)}</b> kg
-                    {' '}+ 加锌 <b>{fmt(c.add)}</b> kg
-                    {' '}→ 当日锌耗 <b style={{ color: 'var(--accent)', fontSize: 18 }}>{fmt(Math.abs(c.tot))}</b> kg
-                    <span className="muted"> = {fmt(Math.abs(c.tot) / 1000, 3)} t</span>
-                    {c.tot < 0 && <div style={{ color: '#d97706', fontSize: 12 }}>⚠ 负数：加锌超过液位能解释的增量，请核对读数/加锌</div>}
-                  </>
-                ) : (
-                  <span className="muted">填班次开工前/结束读数后自动计算</span>
-                )}
+              <div className="zn-calc">
+                <div className="zn-calc-title">锌耗试算</div>
+                <div className="zn-calc-body">
+                  {isFinite(c.tot) ? (
+                    <>
+                      <div className="zn-calc-line">
+                        液面{c.drop >= 0 ? '下降' : '上升'} <b>{fmt(Math.abs(c.drop), 1)}</b> mm
+                        × <b>{fmt(c.k, 1)}</b> kg/mm = <b>{fmt(c.lv)}</b> kg
+                        <span className="op">+</span>
+                        加锌 <b>{fmt(c.add)}</b> kg
+                      </div>
+                      <div className="zn-calc-result">
+                        <span>当日锌耗</span>
+                        <b>{Number(c.tot) < 0 ? '−' : ''}{fmt(Math.abs(c.tot))}<i>kg</i></b>
+                        <em>= {fmt(Math.abs(c.tot) / 1000, 3)} t</em>
+                      </div>
+                      {c.tot < 0 && (
+                        <div className="zn-calc-warn">⚠ 负数：加锌超过液位能解释的增量，请核对读数/加锌</div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="muted">填班次开工前 / 结束读数后自动计算</div>
+                  )}
+                </div>
               </div>
             </div>
             <div className="modal-footer">
