@@ -75,8 +75,8 @@ public class ZnLedgerController {
 
         List<Map<String, Object>> cols = List.of(
                 Map.of("key", "work_date", "label", "日期"),
-                Map.of("key", "h0", "label", "期初读数mm"),
-                Map.of("key", "h1", "label", "期末读数mm"),
+                Map.of("key", "h0", "label", "班次开工前读数mm"),
+                Map.of("key", "h1", "label", "班次结束时读数mm"),
                 Map.of("key", "level_drop_mm", "label", "液面变化mm"),
                 Map.of("key", "add_zinc_kg", "label", "加锌kg"),
                 Map.of("key", "day_zinc_kg", "label", "当日锌耗kg"),
@@ -109,7 +109,7 @@ public class ZnLedgerController {
         if (req.potLength() == null || req.potLength().signum() <= 0) throw new BizException("锅长要填正数");
         if (req.potWidth() == null || req.potWidth().signum() <= 0) throw new BizException("锅宽要填正数");
         if (req.zincDensity() == null || req.zincDensity().signum() <= 0) throw new BizException("密度要填正数");
-        if (req.h0() == null || req.h1() == null) throw new BizException("期初、期末读数都要填");
+        if (req.h0() == null || req.h1() == null) throw new BizException("班次开工前/结束读数都要填");
 
         if (repo.existsByWorkDateAndIdNot(req.workDate(), req.id() == null ? -1L : req.id())) {
             throw new BizException("日期 " + req.workDate() + " 已有记录，请改用更新或换日期");

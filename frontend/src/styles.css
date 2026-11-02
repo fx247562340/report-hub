@@ -1779,3 +1779,35 @@ tbody tr:hover { background: rgba(255,255,255,.02); }
   0% { transform: translateX(-100%); }
   100% { transform: translateX(250%); }
 }
+
+/* 锌耗台账弹窗表单 */
+.zn-form { display: flex; flex-direction: column; gap: 4px; }
+.zn-sec {
+  display: flex; align-items: center; gap: 8px;
+  margin: 14px 0 8px; padding-top: 10px;
+  border-top: 1px dashed var(--border, #e1e4ea);
+  font-size: 12px; font-weight: 600; letter-spacing: .04em;
+  color: var(--muted-foreground, #6b7280);
+}
+.zn-form > .zn-sec:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.zn-sec em { font-style: normal; font-weight: 500; color: var(--foreground, #16181d); font-variant-numeric: tabular-nums; }
+.zn-sec em b { color: var(--accent, #2563eb); }
+.zn-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px;
+}
+@media (max-width: 640px) { .zn-grid { grid-template-columns: 1fr; } }
+.zn-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.zn-field > span {
+  font-size: 12px; color: var(--muted-foreground, #6b7280);
+}
+.zn-field .input { width: 100%; }
+.zn-ro {
+  min-height: 36px; display: flex; align-items: center; gap: 4px;
+  padding: 7px 10px; border: 1px dashed var(--border, #e1e4ea); border-radius: 7px;
+  font-variant-numeric: tabular-nums; color: var(--muted-foreground, #6b7280);
+}
+.zn-ro b { color: var(--foreground, #16181d); font-weight: 650; font-size: 14px; }
+.zn-adds { display: flex; flex-direction: column; gap: 8px; }
+.zn-add-row { display: flex; gap: 10px; align-items: center; }
+.zn-add-row .input[type="time"] { width: 130px; flex: none; }
+.zn-add-row .input[type="number"] { flex: 1; max-width: 220px; }

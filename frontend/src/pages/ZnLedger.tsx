@@ -45,7 +45,7 @@ function calc(L: number, W: number, rho: number, h0: number, h1: number, adds: A
 
 const emptyForm = {
   workDate: todayStr(),
-  potLength: '10',
+  potLength: '12.5',
   potWidth: '2.2',
   zincDensity: '6.55',
   h0: '',
@@ -123,7 +123,7 @@ export default function ZnLedger() {
 
   async function save() {
     if (!form.workDate) return setError('先选日期')
-    if (!form.h0 || !form.h1) return setError('期初、期末读数都要填')
+    if (!form.h0 || !form.h1) return setError('班次开工前/结束读数都要填')
     setSaving(true)
     setError('')
     try {
@@ -245,8 +245,8 @@ export default function ZnLedger() {
               <thead>
                 <tr>
                   <th>日期</th>
-                  <th>期初 mm</th>
-                  <th>期末 mm</th>
+                  <th>班次开工前 mm</th>
+                  <th>班次结束 mm</th>
                   <th>液面变化 mm</th>
                   <th>加锌 kg</th>
                   <th>当日锌耗 kg</th>
@@ -295,32 +295,75 @@ export default function ZnLedger() {
             <div className="modal-body">
               {error && <div className="error-banner" style={{ marginBottom: 10 }}>{error}</div>}
 
-              <div className="report-filters" style={{ marginBottom: 8 }}>
-                <div className="filter-item"><span className="muted">日期</span>
-                  <input className="input" type="date" value={form.workDate}
-                    onChange={(e) => setForm({ ...form, workDate: e.target.value })} /></div>
-                <div className="filter-item"><span className="muted">锅长 m</span>
-                  <input className="input" type="number" step="0.01" value={form.potLength}
-                    onChange={(e) => setForm({ ...form, potLength: e.target.value })} /></div>
-                <div className="filter-item"><span className="muted">锅宽 m</span>
-                  <input className="input" type="number" step="0.01" value={form.potWidth}
-                    onChange={(e) => setForm({ ...form, potWidth: e.target.value })} /></div>
-                <div className="filter-item"><span className="muted">密度 g/cm³</span>
-                  <input className="input" type="number" step="0.001" value={form.zincDensity}
-                    onChange={(e) => setForm({ ...form, zincDensity: e.target.value })} /></div>
-              </div>
+              <div className="zn-form">
+                <div className="zn-sec">基本信息</div>
+                <div className="zn-grid">
+                  <label className="zn-field">
+                    <span>日期</span>
+                    <input className="input" type="date" value={form.workDate}
+                      onChange={(e) => setForm({ ...form, workDate: e.target.value })} />
+                  </label>
+                  <label className="zn-field">
+                    <span>锅长 (m)</span>
+                    <input className="input" type="number" step="0.01" value={form.potLength}
+                      onChange={(e) => setForm({ ...form, potLength: e.target.value })} />
+                  </label>
+                  <label className="zn-field">
+                    <span>锅宽 (m)</span>
+                    <input className="input" type="number" step="0.01" value={form.potWidth}
+                      onChange={(e) => setForm({ ...form, potWidth: e.target.value })} />
+                  </label>
+                  <label className="zn-field">
+                    <span>锌液密度 (g/cm³)</span>
+                    <input className="input" type="number" step="0.001" value={form.zincDensity}
+                      onChange={(e) => setForm({ ...form, zincDensity: e.target.value })} />
+                  </label>
+                </div>
 
-              <div className="report-filters" style={{ marginBottom: 8 }}>
-                <div className="filter-item"><span className="muted">期初读数 mm</span>
-                  <input className="input" type="number" step="0.5" value={form.h0}
-                    onChange={(e) => setForm({ ...form, h0: e.target.value })} /></div>
-                <div className="filter-item"><span className="muted">期末读数 mm</span>
-                  <input className="input" type="number" step="0.5" value={form.h1}
-                    onChange={(e) => setForm({ ...form, h1: e.target.value })} /></div>
-                <div className="filter-item"><span className="muted">量程 K</span>
-                  <b>{isFinite(c.k) ? `${fmt(c.k, 1)} kg/mm` : '—'}</b></div>
-                <div className="filter-item"><span className="muted">液面变化</span>
-                  <b>{isFinite(c.drop) ? `${c.drop >= 0 ? '↓' : '↑'} ${fmt(Math.abs(c.drop), 1)} mm` : '—'}</b></div>
+                <div className="zn-sec">班次液位</div>
+                <div className="zn-grid">
+                  <label className="zn-field">
+                    <span>班次开工前读数 (mm)</span>
+                    <input className="input" type="number" step="0.5" value={form.h0} placeholder="开工前从上沿往下量"
+                      onChange={(e) => setForm({ ...form, h0: e.target.value })} />
+                  </label>
+                  <label className="zn-field">
+                    <span>班次结束时读数 (mm)</span>
+                    <input className="input" type="number" step="0.5" value={form.h1} placeholder="收工前从上沿往下量"
+                      onChange={(e) => setForm({ ...form, h1: e.target.value })} />
+                  </label>
+                  <div className="zn-field">
+                    <span>量程 K</span>
+                    <div className="zn-ro">{isFinite(c.k) ? <><b>{fmt(c.k, 1)}</b> kg/mm</> : '—'}</div>
+                  </div>
+                  <div className="zn-field">
+                    <span>液面变化</span>
+                    <div className="zn-ro">{isFinite(c.drop) ? <><b>{c.drop >= 0 ? '↓' : '↑'} {fmt(Math.abs(c.drop), 1)}</b> mm</> : '—'}</div>
+                  </div>
+                </div>
+
+                <div className="zn-sec">
+                  加锌明细
+                  <em>合计 <b>{fmt(c.add)}</b> kg</em>
+                  <button className="btn sm" style={{ marginLeft: 'auto' }}
+                    onClick={() => setAdds([...adds, { t: nowHM(), w: '' }])}>+ 一条</button>
+                </div>
+                <div className="zn-adds">
+                  {adds.map((a, i) => (
+                    <div className="zn-add-row" key={i}>
+                      <input className="input" type="time" value={a.t}
+                        onChange={(e) => setAdds(adds.map((x, j) => (j === i ? { ...x, t: e.target.value } : x)))} />
+                      <input className="input" type="number" step="1" placeholder="锌锭净重 kg" value={a.w}
+                        onChange={(e) => setAdds(adds.map((x, j) => (j === i ? { ...x, w: e.target.value } : x)))} />
+                      <button className="btn sm" onClick={() => setAdds(adds.filter((_, j) => j !== i))}>删除</button>
+                    </div>
+                  ))}
+                  {adds.length === 0 && <div className="muted">本班未加锌</div>}
+                </div>
+
+                <div className="zn-sec">备注</div>
+                <input className="input" value={form.note} placeholder="换锅、停线、补加合金锭、称重异常…"
+                  onChange={(e) => setForm({ ...form, note: e.target.value })} />
               </div>
 
               <div className="row" style={{ justifyContent: 'space-between', margin: '10px 0 6px' }}>
@@ -356,7 +399,7 @@ export default function ZnLedger() {
                     {c.tot < 0 && <div style={{ color: '#d97706', fontSize: 12 }}>⚠ 负数：加锌超过液位能解释的增量，请核对读数/加锌</div>}
                   </>
                 ) : (
-                  <span className="muted">填期初 / 期末读数后自动计算</span>
+                  <span className="muted">填班次开工前/结束读数后自动计算</span>
                 )}
               </div>
             </div>
