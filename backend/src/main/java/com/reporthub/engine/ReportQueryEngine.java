@@ -6,6 +6,8 @@ import com.reporthub.common.BizException;
 import com.reporthub.config.ReportHubProperties;
 import com.reporthub.domain.*;
 import com.reporthub.repo.*;
+import com.reporthub.service.QueryModeService;
+import com.reporthub.service.SyncStore;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +25,8 @@ public class ReportQueryEngine {
     private final FieldMappingRepo fieldMappingRepo;
     private final RelationRepo relationRepo;
     private final ReportHubProperties props;
+    private final SyncStore syncStore;
+    private final QueryModeService queryModeService;
 
     public ReportQueryEngine(ObjectMapper mapper,
                              UpstreamClient upstream,
@@ -31,7 +35,9 @@ public class ReportQueryEngine {
                              DatasetRepo datasetRepo,
                              FieldMappingRepo fieldMappingRepo,
                              RelationRepo relationRepo,
-                             ReportHubProperties props) {
+                             ReportHubProperties props,
+                             SyncStore syncStore,
+                             QueryModeService queryModeService) {
         this.mapper = mapper;
         this.upstream = upstream;
         this.dataSourceRepo = dataSourceRepo;
@@ -40,6 +46,8 @@ public class ReportQueryEngine {
         this.fieldMappingRepo = fieldMappingRepo;
         this.relationRepo = relationRepo;
         this.props = props;
+        this.syncStore = syncStore;
+        this.queryModeService = queryModeService;
     }
 
     public record QueryRequest(Map<String, Object> filters, int page, int pageSize) {
@@ -72,9 +80,15 @@ public class ReportQueryEngine {
                 ? new QueryRequest(req.filters(), 1, Math.max(req.pageSize(), props.getEngine().getMaxRootRows()))
                 : req;
 
+        List<RelationDef> relations = relationRepo.findByReportCodeOrderBySortAsc(report.getCode());
+
+        // 本地模式：只读 sync_records 原始行，映射/关联逻辑不变
+        if (queryModeService.isLocal()) {
+            return queryLocal(report, req, trace, bundles, relations, t0);
+        }
+
         RootFetch rootFetch = fetchRoot(report, fetchReq, trace, bundles);
         Dataset root = rootFetch.dataset();
-        List<RelationDef> relations = relationRepo.findByReportCodeOrderBySortAsc(report.getCode());
 
         // 各子表都按主表键取数，可并行拉完再按顺序 join
         List<Dataset> rights = new ArrayList<>();
@@ -198,6 +212,64 @@ public class ReportQueryEngine {
         Dataset data = materialize(report.getRootDataset(), upstream.mapAll(result.rawRows(), rulesFor(bundles, report.getRootDataset())));
         Long upstreamTotal = result.total() == null ? null : result.total().longValue();
         return new RootFetch(data, upstreamTotal);
+    }
+
+    /** 本地数据模式：上游原始行已在 sync_records，复用同一套映射与关联 */
+    private QueryResult queryLocal(ReportDef report, QueryRequest req, List<TraceCall> trace,
+                                   List<FieldRuleBundle> bundles, List<RelationDef> relations, long t0) {
+        Dataset root = loadLocal(report.getRootDataset(), trace, bundles);
+        Dataset current = root;
+        for (RelationDef rel : relations) {
+            Dataset right = loadLocal(rel.getRightDataset(), trace, bundles);
+            current = join(current, right, rel);
+        }
+        List<Map<String, Object>> projected = project(current, report);
+        applyCalcs(projected, report);
+        List<Map<String, Object>> all = applyInMemoryFilters(projected, remapLocalFilters(report, req.filters()));
+        sortRows(all, report);
+        long total = all.size();
+        List<Map<String, Object>> pageRows = paginate(all, req.page(), req.pageSize());
+        return new QueryResult(parseResultColumns(report), pageRows, req.page(), req.pageSize(), total,
+                trace, System.currentTimeMillis() - t0);
+    }
+
+    /**
+     * 本地模式：筛选键可能是上游参数名（如 endImmersionTime），
+     * 映射到投影列（localField）后才能内存过滤。
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> remapLocalFilters(ReportDef report, Map<String, Object> filters) {
+        if (filters == null || filters.isEmpty()) return filters;
+        Map<String, String> alias = new java.util.HashMap<>();
+        try {
+            List<Map<String, Object>> defs = mapper.readValue(
+                    report.getFiltersJson() == null ? "[]" : report.getFiltersJson(),
+                    new TypeReference<List<Map<String, Object>>>() {});
+            for (Map<String, Object> d : defs) {
+                Object k = d.get("key");
+                Object lf = d.get("localField");
+                if (k != null && lf != null && !String.valueOf(lf).isBlank()) {
+                    alias.put(String.valueOf(k), String.valueOf(lf));
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        if (alias.isEmpty()) return filters;
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : filters.entrySet()) {
+            String key = alias.getOrDefault(e.getKey(), e.getKey());
+            out.put(key, e.getValue());
+        }
+        return out;
+    }
+
+    private Dataset loadLocal(String datasetCode, List<TraceCall> trace, List<FieldRuleBundle> bundles) {
+        long t0 = System.currentTimeMillis();
+        List<com.fasterxml.jackson.databind.node.ObjectNode> raw = syncStore.loadRaw(datasetCode);
+        List<Map<String, Object>> mapped = upstream.mapAll(raw, rulesFor(bundles, datasetCode));
+        trace.add(new TraceCall("local", "sync_records", datasetCode, mapped.size(),
+                System.currentTimeMillis() - t0));
+        return materialize(datasetCode, mapped);
     }
 
     private Dataset fetchRelated(RelationDef rel, Dataset left, QueryRequest req,
@@ -624,8 +696,35 @@ public class ReportQueryEngine {
         for (Map<String, Object> row : rows) {
             boolean ok = true;
             for (Map.Entry<String, Object> f : filters.entrySet()) {
-                if (f.getValue() == null || f.getValue() instanceof Map) continue;
-                String fv = String.valueOf(f.getValue());
+                Object raw = f.getValue();
+                if (raw == null) continue;
+                if (raw instanceof Map<?, ?> range) {
+                    // 日期/区间筛选 {start,end}
+                    if (!row.containsKey(f.getKey())) continue;
+                    Object cell = row.get(f.getKey());
+                    if (cell == null) { ok = false; break; }
+                    String cv = String.valueOf(cell);
+                    String cd = cv.length() >= 10 ? cv.substring(0, 10) : cv;
+                    Object s = range.get("start");
+                    Object e = range.get("end");
+                    if (s != null && !String.valueOf(s).isBlank()) {
+                        String sd = String.valueOf(s);
+                        sd = sd.length() >= 10 ? sd.substring(0, 10) : sd;
+                        if (cd.compareTo(sd) < 0) { ok = false; break; }
+                    }
+                    if (e != null && !String.valueOf(e).isBlank()) {
+                        String ev = String.valueOf(e);
+                        // 与上游一致：截止日为 date-only 时视为「当天 0 点前」（不含当天）
+                        if (ev.length() == 10) {
+                            if (cd.compareTo(ev) >= 0) { ok = false; break; }
+                        } else {
+                            String ed = ev.length() >= 10 ? ev.substring(0, 10) : ev;
+                            if (cd.compareTo(ed) > 0) { ok = false; break; }
+                        }
+                    }
+                    continue;
+                }
+                String fv = String.valueOf(raw);
                 if (fv.isBlank()) continue;
                 // only filter when this key exists on the projected row (upstream-only binds are ignored)
                 if (!row.containsKey(f.getKey())) continue;

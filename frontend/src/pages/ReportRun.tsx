@@ -65,6 +65,7 @@ function buildQueryFilters(values: Record<string, any>, filtersDef: Filter[]) {
 }
 
 const MODE_LABEL: Record<string, string> = {
+  local: '本地库',
   root: '主表',
   dual_list: '双侧列表',
   child_batch: '批量 IN',

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { clearSession, getUser } from '../api/client'
+import { api, clearSession, getUser } from '../api/client'
 import Icon, { IconName } from '../components/Icon'
 import Logo from '../components/Logo'
 
@@ -12,6 +12,7 @@ const menuAll: { to: string; label: string; icon: IconName; adminOnly: boolean }
   { to: '/endpoints', label: '接口', icon: 'api', adminOnly: true },
   { to: '/datasets', label: '数据集', icon: 'dataset', adminOnly: true },
   { to: '/relations', label: '关联关系', icon: 'relation', adminOnly: true },
+  { to: '/sync', label: '数据同步', icon: 'dataset', adminOnly: true },
   { to: '/users', label: '用户管理', icon: 'users', adminOnly: true },
   { to: '/about', label: '使用说明', icon: 'help', adminOnly: false },
 ]
@@ -23,6 +24,28 @@ export default function Shell() {
   const menu = menuAll.filter((item) => isAdmin || !item.adminOnly)
   const [menuOpen, setMenuOpen] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
+  const [queryMode, setQueryMode] = useState<string>('realtime')
+  const [modeBusy, setModeBusy] = useState(false)
+
+  useEffect(() => {
+    api.get<any>('/api/settings/query-mode').then((d) => {
+      setQueryMode(d?.queryMode || 'realtime')
+    }).catch(() => {})
+  }, [])
+
+  async function toggleQueryMode() {
+    if (modeBusy) return
+    setModeBusy(true)
+    const next = queryMode === 'local' ? 'realtime' : 'local'
+    try {
+      const d = await api.post<any>('/api/settings/query-mode', { queryMode: next })
+      setQueryMode(d?.queryMode || next)
+    } catch (e) {
+      // ignore
+    } finally {
+      setModeBusy(false)
+    }
+  }
   const menuRef = useRef<HTMLDivElement>(null)
   const displayName = user?.displayName || user?.username || 'U'
   const initials = displayName.slice(0, 2).toUpperCase()
@@ -73,14 +96,14 @@ export default function Shell() {
                 className="pill"
                 style={{ cursor: 'pointer', border: '1px solid var(--border)' }}
                 onClick={() => {
-                  setInfoOpen((v) => !v)
+                  toggleQueryMode()
                   setMenuOpen(false)
                 }}
-                title="聚合方式说明"
+                title={queryMode === 'local' ? '当前：本地数据（点击切回实时聚合）' : '当前：实时聚合（点击切换为本地数据）'}
               >
                 <Icon name="bolt" size={13} />
-                实时聚合
-                <span className="toggle" aria-hidden />
+                {queryMode === 'local' ? '本地数据' : '实时聚合'}
+                <span className={`toggle${queryMode === 'local' ? '' : ' on'}`} aria-hidden />
               </button>
               {infoOpen && (
                 <div
@@ -89,17 +112,21 @@ export default function Shell() {
                     position: 'absolute',
                     right: 0,
                     top: 44,
-                    width: 280,
+                    width: 300,
                     zIndex: 40,
                     boxShadow: '0 12px 40px rgba(0,0,0,.35)',
                     fontSize: 12,
                   }}
                 >
-                  <b>实时聚合</b>
+                  <b>{queryMode === 'local' ? '本地数据' : '实时聚合'}</b>
                   <div className="muted" style={{ marginTop: 8, lineHeight: 1.5 }}>
-                    业务数据每次查询实时调用上游 ERP / MES，结果不落库。
-                    当前模式固定为开启，保证与源系统一致。
+                    {queryMode === 'local'
+                      ? '查询本地同步库中的上游原始数据，不打 ERP / MES 接口。字段映射与关联配置不变。'
+                      : '业务数据每次查询实时调用上游 ERP / MES，结果不落库。点开关可切换到本地数据。'}
                   </div>
+                  <button className="btn sm" style={{ marginTop: 10 }} onClick={() => navigate('/sync')}>
+                    数据同步
+                  </button>
                 </div>
               )}
             </div>
