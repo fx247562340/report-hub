@@ -29,6 +29,15 @@ public class SyncController {
         return ApiResponse.ok(syncService.listJobs());
     }
 
+    @PostMapping("/sync/{datasetCode}/schedule")
+    public ApiResponse<?> updateSchedule(@PathVariable String datasetCode, @RequestBody Map<String, Object> body) {
+        String type = String.valueOf(body.getOrDefault("scheduleType", "manual"));
+        String time = body.get("scheduleTime") == null ? null : String.valueOf(body.get("scheduleTime"));
+        Integer weekday = body.get("scheduleWeekday") == null ? null : Integer.valueOf(String.valueOf(body.get("scheduleWeekday")));
+        Integer interval = body.get("scheduleIntervalMin") == null ? null : Integer.valueOf(String.valueOf(body.get("scheduleIntervalMin")));
+        return ApiResponse.ok(syncService.updateSchedule(datasetCode, type, time, weekday, interval));
+    }
+
     @PostMapping("/sync/{datasetCode}/stop")
     public ApiResponse<?> stop(@PathVariable String datasetCode) {
         syncService.requestCancel(datasetCode);

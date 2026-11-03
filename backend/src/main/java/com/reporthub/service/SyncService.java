@@ -63,6 +63,93 @@ public class SyncService {
         return cancelRequested.contains(datasetCode);
     }
 
+    /** 更新调度配置 */
+    public SyncConfig updateSchedule(String datasetCode, String scheduleType, String scheduleTime,
+                                     Integer scheduleWeekday, Integer scheduleIntervalMin) {
+        if (scheduleType == null) scheduleType = "manual";
+        if (!java.util.Set.of("manual", "interval", "daily", "weekly").contains(scheduleType)) {
+            throw new BizException("schedule_type 必须是 manual|interval|daily|weekly");
+        }
+        SyncConfig cfg = configRepo.findById(datasetCode)
+                .orElseThrow(() -> new BizException("未配置同步: " + datasetCode));
+        cfg.setScheduleType(scheduleType);
+        cfg.setScheduleTime(scheduleTime);
+        cfg.setScheduleWeekday(scheduleWeekday);
+        cfg.setScheduleIntervalMin(scheduleIntervalMin);
+        cfg.setUpdatedAt(Instant.now());
+        cfg.setNextScheduleRun(computeNextRun(cfg));
+        return configRepo.save(cfg);
+    }
+
+    /** 下次应执行时间；manual 返回 null */
+    public Instant computeNextRun(SyncConfig cfg) {
+        if (cfg.getScheduleType() == null || "manual".equals(cfg.getScheduleType())) return null;
+        java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(zone);
+        switch (cfg.getScheduleType()) {
+            case "interval": {
+                int min = cfg.getScheduleIntervalMin() == null || cfg.getScheduleIntervalMin() <= 0
+                        ? 60 : cfg.getScheduleIntervalMin();
+                Instant base = cfg.getLastScheduleRun() == null ? Instant.now() : cfg.getLastScheduleRun();
+                return base.plusSeconds(min * 60L);
+            }
+            case "daily": {
+                java.time.LocalTime time = parseTime(cfg.getScheduleTime());
+                java.time.ZonedDateTime t = now.toLocalDate().atTime(time).atZone(zone);
+                if (!t.isAfter(now)) t = t.plusDays(1);
+                return t.toInstant();
+            }
+            case "weekly": {
+                java.time.LocalTime time = parseTime(cfg.getScheduleTime());
+                int wd = cfg.getScheduleWeekday() == null ? 1 : cfg.getScheduleWeekday(); // 1=Mon
+                java.time.DayOfWeek target = java.time.DayOfWeek.of(((wd - 1) % 7) + 1);
+                java.time.ZonedDateTime t = now.toLocalDate().atTime(time).atZone(zone);
+                while (t.getDayOfWeek() != target || !t.isAfter(now)) {
+                    t = t.plusDays(1);
+                }
+                return t.toInstant();
+            }
+            default:
+                return null;
+        }
+    }
+
+    private static java.time.LocalTime parseTime(String hhmm) {
+        if (hhmm == null || hhmm.isBlank()) return java.time.LocalTime.of(2, 0);
+        String[] p = hhmm.trim().split(":");
+        int h = Integer.parseInt(p[0]);
+        int m = p.length > 1 ? Integer.parseInt(p[1]) : 0;
+        return java.time.LocalTime.of(Math.min(23, Math.max(0, h)), Math.min(59, Math.max(0, m)));
+    }
+
+    /** 调度器：到点则自动触发全量同步 */
+    public int tickSchedule() {
+        int fired = 0;
+        Instant now = Instant.now();
+        for (SyncConfig cfg : configRepo.findAll()) {
+            if (!Boolean.TRUE.equals(cfg.getEnabled())) continue;
+            if (!"manual".equals(cfg.getScheduleType())) continue;
+            Instant next = cfg.getNextScheduleRun() != null ? cfg.getNextScheduleRun() : computeNextRun(cfg);
+            if (next == null) continue;
+            if (!next.isAfter(now)) {
+                cfg.setLastScheduleRun(now);
+                cfg.setNextScheduleRun(computeNextRun(cfg));
+                configRepo.save(cfg);
+                try {
+                    trigger(cfg.getDatasetCode());
+                    fired++;
+                    log.info("schedule fire dataset={} type={}", cfg.getDatasetCode(), cfg.getScheduleType());
+                } catch (Exception e) {
+                    log.warn("schedule trigger failed {}: {}", cfg.getDatasetCode(), e.getMessage());
+                }
+            } else if (cfg.getNextScheduleRun() == null) {
+                cfg.setNextScheduleRun(next);
+                configRepo.save(cfg);
+            }
+        }
+        return fired;
+    }
+
     public void setEnabled(String datasetCode, boolean enabled) {
         SyncConfig cfg = configRepo.findById(datasetCode)
                 .orElseThrow(() -> new BizException("未配置同步: " + datasetCode));
@@ -95,6 +182,12 @@ public class SyncService {
             m.put("name", ds != null ? ds.getName() : c.getDatasetCode());
             m.put("endpointCode", ds != null ? ds.getEndpointCode() : null);
             m.put("enabled", c.getEnabled());
+            m.put("scheduleType", c.getScheduleType());
+            m.put("scheduleTime", c.getScheduleTime());
+            m.put("scheduleWeekday", c.getScheduleWeekday());
+            m.put("scheduleIntervalMin", c.getScheduleIntervalMin());
+            m.put("lastScheduleRun", c.getLastScheduleRun());
+            m.put("nextScheduleRun", c.getNextScheduleRun());
             m.put("mode", c.getMode());
             m.put("parentDataset", c.getParentDataset());
             m.put("keyPath", c.getKeyPath());

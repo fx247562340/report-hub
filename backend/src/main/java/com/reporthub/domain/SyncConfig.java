@@ -43,6 +43,24 @@ public class SyncConfig {
     @Column(length = 64)
     private String keysEndpoint;
 
+    /** manual | interval | daily | weekly */
+    @Column(nullable = false, length = 16)
+    private String scheduleType = "manual";
+
+    /** daily/weekly 的 HH:mm */
+    @Column(length = 8)
+    private String scheduleTime;
+
+    /** weekly: 1=周一 .. 7=周日 */
+    private Integer scheduleWeekday;
+
+    /** interval：每隔 N 分钟 */
+    private Integer scheduleIntervalMin;
+
+    private Instant lastScheduleRun;
+
+    private Instant nextScheduleRun;
+
     @Column(nullable = false)
     private Instant updatedAt = Instant.now();
 
@@ -66,6 +84,18 @@ public class SyncConfig {
     public void setKeysSql(String keysSql) { this.keysSql = keysSql; }
     public String getKeysEndpoint() { return keysEndpoint; }
     public void setKeysEndpoint(String keysEndpoint) { this.keysEndpoint = keysEndpoint; }
+    public String getScheduleType() { return scheduleType; }
+    public void setScheduleType(String scheduleType) { this.scheduleType = scheduleType; }
+    public String getScheduleTime() { return scheduleTime; }
+    public void setScheduleTime(String scheduleTime) { this.scheduleTime = scheduleTime; }
+    public Integer getScheduleWeekday() { return scheduleWeekday; }
+    public void setScheduleWeekday(Integer scheduleWeekday) { this.scheduleWeekday = scheduleWeekday; }
+    public Integer getScheduleIntervalMin() { return scheduleIntervalMin; }
+    public void setScheduleIntervalMin(Integer scheduleIntervalMin) { this.scheduleIntervalMin = scheduleIntervalMin; }
+    public Instant getLastScheduleRun() { return lastScheduleRun; }
+    public void setLastScheduleRun(Instant lastScheduleRun) { this.lastScheduleRun = lastScheduleRun; }
+    public Instant getNextScheduleRun() { return nextScheduleRun; }
+    public void setNextScheduleRun(Instant nextScheduleRun) { this.nextScheduleRun = nextScheduleRun; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }

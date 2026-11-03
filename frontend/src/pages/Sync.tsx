@@ -13,6 +13,12 @@ type SyncStatus = {
   maxPages: number
   recordCount: number
   lastSyncedAt?: string
+  scheduleType?: string
+  scheduleTime?: string
+  scheduleWeekday?: number
+  scheduleIntervalMin?: number
+  nextScheduleRun?: string
+  lastScheduleRun?: string
   lastJobStatus?: string
   lastJobRows?: number
   lastJobError?: string
@@ -126,6 +132,16 @@ export default function Sync() {
     }
   }
 
+  async function saveSchedule(code: string, patch: Record<string, any>) {
+    try {
+      await api.post(`/api/sync/${code}/schedule`, patch)
+      setMsg(`已更新 ${code} 的同步计划`)
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
   async function toggleEnabled(code: string, enabled: boolean) {
     try {
       await api.post(`/api/sync/${code}/enabled`, { enabled })
@@ -176,6 +192,7 @@ export default function Sync() {
                   <th>接口</th>
                   <th>本地行数</th>
                   <th>最近同步</th>
+                  <th>同步计划</th>
                   <th>最近任务</th>
                   <th>耗时</th>
                   <th>操作</th>
@@ -191,6 +208,67 @@ export default function Sync() {
                     <td className="muted">{x.mode === 'keys' ? '表级全量' : x.mode === 'related' ? '关联' : '列表'}</td>
                     <td className="muted">{x.endpointCode || '—'}</td>
                     <td>{x.recordCount.toLocaleString()}</td>
+                    <td style={{ minWidth: 210 }}>
+                      <select
+                        className="select"
+                        style={{ marginBottom: 4 }}
+                        value={x.scheduleType || 'manual'}
+                        onChange={(e) => {
+                          const type = e.target.value
+                          saveSchedule(x.datasetCode, {
+                            scheduleType: type,
+                            scheduleTime: x.scheduleTime || '02:00',
+                            scheduleWeekday: x.scheduleWeekday || 7,
+                            scheduleIntervalMin: x.scheduleIntervalMin || 60,
+                          })
+                        }}
+                      >
+                        <option value="manual">手动</option>
+                        <option value="interval">每隔</option>
+                        <option value="daily">每天</option>
+                        <option value="weekly">每周</option>
+                      </select>
+                      {(x.scheduleType === 'daily' || x.scheduleType === 'weekly') && (
+                        <>
+                          <input className="input" style={{ width: 90, marginRight: 4 }} type="time"
+                            value={x.scheduleTime || '02:00'}
+                            onChange={(e) => saveSchedule(x.datasetCode, {
+                              scheduleType: x.scheduleType,
+                              scheduleTime: e.target.value,
+                              scheduleWeekday: x.scheduleWeekday || 7,
+                              scheduleIntervalMin: x.scheduleIntervalMin || 60,
+                            })} />
+                          {x.scheduleType === 'weekly' && (
+                            <select className="select" style={{ width: 80 }}
+                              value={String(x.scheduleWeekday || 7)}
+                              onChange={(e) => saveSchedule(x.datasetCode, {
+                                scheduleType: x.scheduleType,
+                                scheduleTime: x.scheduleTime || '02:00',
+                                scheduleWeekday: Number(e.target.value),
+                                scheduleIntervalMin: x.scheduleIntervalMin || 60,
+                              })}>
+                              {[1,2,3,4,5,6,7].map((d) => (
+                                <option key={d} value={d}>{['周一','周二','周三','周四','周五','周六','周日'][d-1]}</option>
+                              ))}
+                            </select>
+                          )}
+                        </>
+                      )}
+                      {x.scheduleType === 'interval' && (
+                        <input className="input" style={{ width: 90 }} type="number" min={5}
+                          value={x.scheduleIntervalMin || 60}
+                          onChange={(e) => saveSchedule(x.datasetCode, {
+                            scheduleType: x.scheduleType,
+                            scheduleTime: x.scheduleTime || '02:00',
+                            scheduleWeekday: x.scheduleWeekday || 7,
+                            scheduleIntervalMin: Number(e.target.value) || 60,
+                          })} />
+                      )}
+                      {x.scheduleType === 'interval' && <span className="muted"> 分钟</span>}
+                      {x.nextScheduleRun && (
+                        <div className="muted" style={{ fontSize: 11 }}>下次 {fmtTime(x.nextScheduleRun)}</div>
+                      )}
+                    </td>
                     <td className="muted">{fmtTime(x.lastSyncedAt)}</td>
                     <td>
                       {x.lastJobStatus ? (
