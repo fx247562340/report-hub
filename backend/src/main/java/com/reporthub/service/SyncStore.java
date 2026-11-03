@@ -33,6 +33,16 @@ public class SyncStore {
         return out;
     }
 
+    /** 逐条解析并回调，降低全表载入峰值内存 */
+    public void forEachRaw(String datasetCode, java.util.function.Consumer<ObjectNode> consumer) {
+        for (SyncRecord r : repo.findByDatasetCodeOrderByIdAsc(datasetCode)) {
+            try {
+                consumer.accept((ObjectNode) mapper.readTree(r.getPayload()));
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
     public Instant lastSyncedAt(String datasetCode) {
         return repo.findLastSyncedAt(datasetCode);
     }

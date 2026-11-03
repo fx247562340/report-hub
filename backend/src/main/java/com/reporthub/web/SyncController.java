@@ -29,6 +29,11 @@ public class SyncController {
         return ApiResponse.ok(syncService.listJobs());
     }
 
+    @PostMapping("/sync/run-all")
+    public ApiResponse<?> runAll() {
+        return ApiResponse.ok(syncService.triggerAll());
+    }
+
     @PostMapping("/sync/{datasetCode}/run")
     public ApiResponse<?> run(@PathVariable String datasetCode) {
         return ApiResponse.ok(syncService.trigger(datasetCode));

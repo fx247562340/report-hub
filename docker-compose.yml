@@ -31,7 +31,7 @@ services:
       DB_DRIVER: org.postgresql.Driver
       JWT_SECRET: ${JWT_SECRET:-report-hub-compose-secret-change-me-32bytes!}
       SEED_DEMO: "true"
-      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx768m}
+      JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx2048m}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     # 不映射宿主机端口；由 web (Nginx) 反代 /api
     depends_on:

@@ -14,6 +14,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.LinkedHashSet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -87,6 +91,34 @@ public class SyncService {
         return jobRepo.findTop50ByOrderByStartedAtDesc();
     }
 
+    /** 一键全同步：列表型先跑，再 keys 型；单线程顺序执行，避免打爆上游 */
+    public List<SyncJob> triggerAll() {
+        List<SyncConfig> all = new java.util.ArrayList<>(configRepo.findAll());
+        all.sort((a, b) -> {
+            boolean ak = "keys".equalsIgnoreCase(a.getMode());
+            boolean bk = "keys".equalsIgnoreCase(b.getMode());
+            if (ak != bk) return ak ? 1 : -1;
+            return a.getDatasetCode().compareTo(b.getDatasetCode());
+        });
+        List<SyncJob> jobs = new java.util.ArrayList<>();
+        List<SyncConfig> plan = new java.util.ArrayList<>();
+        for (SyncConfig c : all) {
+            if (!Boolean.TRUE.equals(c.getEnabled())) continue;
+            SyncJob job = new SyncJob();
+            job.setDatasetCode(c.getDatasetCode());
+            job.setStatus("queued");
+            job.setTrigger("manual");
+            jobs.add(jobRepo.save(job));
+            plan.add(c);
+        }
+        pool.execute(() -> {
+            for (int i = 0; i < plan.size(); i++) {
+                runJob(jobs.get(i).getId(), plan.get(i));
+            }
+        });
+        return jobs;
+    }
+
     /** 异步触发一次全量同步 */
     public SyncJob trigger(String datasetCode) {
         SyncConfig cfg = configRepo.findById(datasetCode)
@@ -94,7 +126,7 @@ public class SyncService {
         if (!Boolean.TRUE.equals(cfg.getEnabled())) throw new BizException("同步已停用: " + datasetCode);
         SyncJob job = new SyncJob();
         job.setDatasetCode(datasetCode);
-        job.setStatus("running");
+        job.setStatus("queued");
         job.setTrigger("manual");
         job = jobRepo.save(job);
         final Long jobId = job.getId();
@@ -105,6 +137,8 @@ public class SyncService {
     void runJob(Long jobId, SyncConfig cfg) {
         SyncJob job = jobRepo.findById(jobId).orElse(null);
         if (job == null) return;
+        job.setStatus("running");
+        jobRepo.save(job);
         long t0 = System.currentTimeMillis();
         int rows = 0;
         int pages = 0;
@@ -211,7 +245,8 @@ public class SyncService {
                 if (node.has(cand) && !node.get(cand).isNull()) { v = node.get(cand); break; }
             }
             if (v == null && node.size() == 1) v = node.elements().next();
-            if (v != null && !String.valueOf(v).isBlank()) keys.add(String.valueOf(v));
+            String key = toPlainString(v);
+            if (key != null && !key.isBlank()) keys.add(key);
         }
 
         DatasetDef ds = datasetRepo.findById(cfg.getDatasetCode())
@@ -222,44 +257,75 @@ public class SyncService {
 
         // 键取到后再替换本地数据，避免失败清空
         tx.executeWithoutResult(s -> recordRepo.deleteByDatasetCode(cfg.getDatasetCode()));
-        int rows = 0;
-        java.util.List<SyncRecord> batch = new java.util.ArrayList<>();
-        for (String key : keys) {
-            if (rows >= cfg.getMaxPages() * cfg.getPageSize()) break;
-            Map<String, Object> ctx = new java.util.HashMap<>();
-            ctx.put("key", key);
-            ctx.put("id", key);
-            try {
-                var result = upstream.fetchList(detailSrc, detailEp, ctx);
-                for (ObjectNode node : result.rawRows()) {
-                    String err = detectErrorEnvelope(node);
-                    if (err != null) throw new BizException("上游返回错误，未入库: " + err);
-                    SyncRecord rec = new SyncRecord();
-                    rec.setDatasetCode(cfg.getDatasetCode());
-                    rec.setPayload(node.toString());
-                    rec.setSourceKey(extractKey(node) != null ? extractKey(node) : key);
-                    rec.setBatchId(jobId);
-                    rec.setSyncedAt(Instant.now());
-                    batch.add(rec);
-                    rows++;
+
+        int limit = Math.max(1, cfg.getMaxPages() * Math.max(1, cfg.getPageSize()));
+        List<String> keyList = new java.util.ArrayList<>(keys);
+        if (keyList.size() > limit) keyList = keyList.subList(0, limit);
+
+        int concurrency = 6;
+        ExecutorService pool = Executors.newFixedThreadPool(concurrency);
+        AtomicInteger rows = new AtomicInteger();
+        final Object flushLock = new Object();
+        final java.util.List<SyncRecord> pending = new java.util.ArrayList<>();
+
+        java.util.function.Consumer<List<SyncRecord>> flush = (batch) -> {
+            if (batch.isEmpty()) return;
+            final List<SyncRecord> slice = new java.util.ArrayList<>(batch);
+            tx.executeWithoutResult(s -> recordRepo.saveAll(slice));
+        };
+
+        List<Future<?>> futures = new java.util.ArrayList<>();
+        for (String key : keyList) {
+            futures.add(pool.submit(() -> {
+                Map<String, Object> ctx = new java.util.HashMap<>();
+                ctx.put("key", key);
+                ctx.put("id", key);
+                try {
+                    var result = upstream.fetchList(detailSrc, detailEp, ctx);
+                    List<ObjectNode> rawRows = result.rawRows();
+                    if (rawRows.size() > 50) {
+                        log.warn("keys detail returned {} rows for one key, skip dataset={} key={}",
+                                rawRows.size(), cfg.getDatasetCode(), key);
+                        return;
+                    }
+                    for (ObjectNode node : rawRows) {
+                        String err = detectErrorEnvelope(node);
+                        if (err != null) throw new BizException("上游返回错误，未入库: " + err);
+                        SyncRecord rec = new SyncRecord();
+                        rec.setDatasetCode(cfg.getDatasetCode());
+                        rec.setPayload(node.toString());
+                        rec.setSourceKey(extractKey(node) != null ? extractKey(node) : key);
+                        rec.setBatchId(jobId);
+                        rec.setSyncedAt(Instant.now());
+                        rows.incrementAndGet();
+                        List<SyncRecord> toFlush = null;
+                        synchronized (flushLock) {
+                            pending.add(rec);
+                            if (pending.size() >= 100) {
+                                toFlush = new java.util.ArrayList<>(pending);
+                                pending.clear();
+                            }
+                        }
+                        if (toFlush != null) flush.accept(toFlush);
+                    }
+                } catch (Exception e) {
+                    log.warn("keys fetch failed dataset={} key={} err={}", cfg.getDatasetCode(), key, e.getMessage());
                 }
-            } catch (BizException be) {
-                throw be;
-            } catch (Exception e) {
-                log.warn("keys fetch failed dataset={} key={} err={}", cfg.getDatasetCode(), key, e.getMessage());
-            }
-            if (batch.size() >= 500) {
-                final List<SyncRecord> toSave = batch;
-                tx.executeWithoutResult(s -> recordRepo.saveAll(toSave));
-                batch = new java.util.ArrayList<>();
-            }
+            }));
         }
-        if (!batch.isEmpty()) {
-            final List<SyncRecord> toSave = batch;
-            tx.executeWithoutResult(s -> recordRepo.saveAll(toSave));
+        try {
+            for (Future<?> f : futures) f.get();
+        } finally {
+            pool.shutdownNow();
         }
-        log.info("keys sync done dataset={} keys={} rows={}", cfg.getDatasetCode(), keys.size(), rows);
-        return rows;
+        List<SyncRecord> rest;
+        synchronized (flushLock) {
+            rest = new java.util.ArrayList<>(pending);
+            pending.clear();
+        }
+        flush.accept(rest);
+        log.info("keys sync done dataset={} keys={} rows={}", cfg.getDatasetCode(), keyList.size(), rows.get());
+        return rows.get();
     }
 
     private ApiEndpointDef copyWithBody(ApiEndpointDef ep, String body) {
@@ -279,6 +345,15 @@ public class SyncService {
         return c;
     }
 
+    private static String toPlainString(Object v) {
+        if (v == null) return null;
+        if (v instanceof com.fasterxml.jackson.databind.JsonNode jn) {
+            if (jn.isValueNode()) return jn.asText(null);
+            return jn.toString();
+        }
+        return String.valueOf(v);
+    }
+
     /** 上游把登录失败/业务错误包成一条 JSON 时，不能当业务行入库 */
     static String detectErrorEnvelope(ObjectNode node) {
         if (node.has("success") && node.get("success").isBoolean() && !node.get("success").asBoolean()) {
@@ -287,6 +362,14 @@ public class SyncService {
         if (node.has("code") && node.get("code").isNumber() && node.get("code").asInt() >= 400
                 && (node.has("msg") || node.has("message")) && node.size() <= 5) {
             return node.path("msg").asText(node.path("message").asText("code>=400"));
+        }
+        // U9 包装异常：{"xxx.Datas[0].DocNo": {"_errors": [...]}}
+        var it = node.fields();
+        while (it.hasNext()) {
+            var e = it.next();
+            if (e.getValue() != null && e.getValue().has("_errors")) {
+                return "上游异常: " + e.getKey();
+            }
         }
         return null;
     }

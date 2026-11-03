@@ -69,6 +69,29 @@ export default function Sync() {
     load()
   }, [])
 
+  async function runAll() {
+    setBusy('ALL')
+    setError('')
+    setMsg('')
+    try {
+      await api.post('/api/sync/run-all')
+      setMsg('已开始全量同步（按顺序执行），请稍候…')
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 3000))
+        await load()
+        const running = list.some((x) => x.lastJobStatus === 'running')
+        if (!running && i > 2) {
+          setMsg('全量同步任务已触发完成（各表请看最近任务状态）')
+          break
+        }
+      }
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
   async function runSync(code: string) {
     setBusy(code)
     setError('')
@@ -108,6 +131,9 @@ export default function Sync() {
             <i>查询模式</i>
             <b>{mode === 'local' ? '本地数据' : '实时聚合'}</b>
           </span>
+          <button className="btn sm" onClick={runAll} disabled={busy === 'ALL'}>
+            <Icon name="bolt" size={13} />{busy === 'ALL' ? '同步中…' : '一键全同步'}
+          </button>
           <button className="btn sm" onClick={load} disabled={loading}>
             <Icon name="play" size={13} />{loading ? '刷新中…' : '刷新'}
           </button>
@@ -127,6 +153,7 @@ export default function Sync() {
               <thead>
                 <tr>
                   <th>数据集</th>
+                  <th>方式</th>
                   <th>接口</th>
                   <th>本地行数</th>
                   <th>最近同步</th>
@@ -142,6 +169,7 @@ export default function Sync() {
                       <b>{x.name || x.datasetCode}</b>
                       <div className="muted" style={{ fontSize: 11 }}>{x.datasetCode}</div>
                     </td>
+                    <td className="muted">{x.mode === 'keys' ? '表级全量' : x.mode === 'related' ? '关联' : '列表'}</td>
                     <td className="muted">{x.endpointCode || '—'}</td>
                     <td>{x.recordCount.toLocaleString()}</td>
                     <td className="muted">{fmtTime(x.lastSyncedAt)}</td>
