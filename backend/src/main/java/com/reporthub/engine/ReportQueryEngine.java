@@ -90,16 +90,15 @@ public class ReportQueryEngine {
         RootFetch rootFetch = fetchRoot(report, fetchReq, trace, bundles);
         Dataset root = rootFetch.dataset();
 
-        // 各子表都按主表键取数，可并行拉完再按顺序 join
-        List<Dataset> rights = new ArrayList<>();
-        if (relations.isEmpty()) {
-            // no-op
-        } else if (relations.size() == 1) {
-            rights.add(fetchRelated(relations.get(0), root, fetchReq, trace, bundles));
-        } else {
-            List<CompletableFuture<Dataset>> futures = new ArrayList<>();
+        // 只有当所有关联键都在主表上时才可并行；链式关联（键来自上一级子表）必须按顺序取
+        String rootDs = report.getRootDataset();
+        boolean keysOnRoot = relations.stream().allMatch(r -> rootDs.equals(r.getLeftDataset()));
+        Dataset current = root;
+        if (keysOnRoot && relations.size() > 1) {
+            List<Dataset> rights = new ArrayList<>();
             ExecutorService pool = Executors.newFixedThreadPool(Math.min(relations.size(), 4));
             try {
+                List<CompletableFuture<Dataset>> futures = new ArrayList<>();
                 for (RelationDef rel : relations) {
                     futures.add(CompletableFuture.supplyAsync(
                             () -> fetchRelated(rel, root, fetchReq, trace, bundles), pool));
@@ -114,11 +113,14 @@ public class ReportQueryEngine {
             } finally {
                 pool.shutdownNow();
             }
-        }
-
-        Dataset current = root;
-        for (int i = 0; i < relations.size(); i++) {
-            current = join(current, rights.get(i), relations.get(i));
+            for (int i = 0; i < relations.size(); i++) {
+                current = join(current, rights.get(i), relations.get(i));
+            }
+        } else {
+            for (RelationDef rel : relations) {
+                Dataset right = fetchRelated(rel, current, fetchReq, trace, bundles);
+                current = join(current, right, rel);
+            }
         }
 
         List<Map<String, Object>> projected = project(current, report);
@@ -536,6 +538,8 @@ public class ReportQueryEngine {
             String k = pairs.stream()
                     .map(p -> JsonPaths.normKey(resolve(r, rightDs, p.rightField())))
                     .collect(Collectors.joining("||"));
+            // 空关联键不参与匹配，避免空=空误连
+            if (k.isEmpty() || k.equals("||") || k.chars().allMatch(ch -> ch == '|' || ch == ' ')) continue;
             index.computeIfAbsent(k, x -> new ArrayList<>()).add(r);
         }
 
@@ -544,7 +548,8 @@ public class ReportQueryEngine {
             String k = pairs.stream()
                     .map(p -> JsonPaths.normKey(resolve(l, leftDs, p.leftField())))
                     .collect(Collectors.joining("||"));
-            List<Map<String, Object>> matches = index.getOrDefault(k, List.of());
+            List<Map<String, Object>> matches = (k.isEmpty() || k.equals("||"))
+                    ? List.of() : index.getOrDefault(k, List.of());
             String countKey = rightDs + ".__count";
             int matchCount = matches.size();
             for (Map<String, Object> m : matches) {

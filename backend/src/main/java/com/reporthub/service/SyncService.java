@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.reporthub.common.BizException;
 import com.reporthub.domain.*;
+import com.reporthub.engine.JsonPaths;
 import com.reporthub.engine.UpstreamClient;
 import com.reporthub.repo.*;
 import org.slf4j.Logger;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -63,6 +65,8 @@ public class SyncService {
             m.put("endpointCode", ds != null ? ds.getEndpointCode() : null);
             m.put("enabled", c.getEnabled());
             m.put("mode", c.getMode());
+            m.put("parentDataset", c.getParentDataset());
+            m.put("keyPath", c.getKeyPath());
             m.put("pageSize", c.getPageSize());
             m.put("maxPages", c.getMaxPages());
             m.put("recordCount", recordRepo.countByDatasetCode(c.getDatasetCode()));
@@ -113,6 +117,10 @@ public class SyncService {
             // 全量替换（需要事务执行 @Modifying delete）
             tx.executeWithoutResult(s -> recordRepo.deleteByDatasetCode(cfg.getDatasetCode()));
 
+            if ("related".equalsIgnoreCase(cfg.getMode())) {
+                rows = syncRelated(cfg, jobId, src, ep);
+                pages = 1;
+            } else {
             int pageSize = cfg.getPageSize();
             java.util.List<SyncRecord> batch = new java.util.ArrayList<>();
             for (int page = 1; page <= cfg.getMaxPages(); page++) {
@@ -152,6 +160,7 @@ public class SyncService {
                 final List<SyncRecord> toSave = batch;
                 tx.executeWithoutResult(s -> recordRepo.saveAll(toSave));
             }
+            }
 
             job.setStatus("success");
             job.setRowCount(rows);
@@ -170,6 +179,67 @@ public class SyncService {
             jobRepo.save(job);
             log.warn("sync failed dataset={} err={}", cfg.getDatasetCode(), e.getMessage());
         }
+    }
+
+    /**
+     * 关联同步：从父数据集本地原始行取键，逐个调子接口，存子表原始行。
+     * 例：挂次 hangNo → U9 完工；完工 m_mO.m_code → 生产订单。
+     */
+    int syncRelated(SyncConfig cfg, Long jobId, DataSourceDef src, ApiEndpointDef ep) {
+        String parent = cfg.getParentDataset();
+        String keyPath = cfg.getKeyPath();
+        if (parent == null || parent.isBlank() || keyPath == null || keyPath.isBlank()) {
+            throw new BizException("related 模式需要 parent_dataset 与 key_path");
+        }
+        List<SyncRecord> parents = recordRepo.findByDatasetCodeOrderByIdAsc(parent);
+        if (parents.isEmpty()) {
+            throw new BizException("父数据集无本地数据，请先同步: " + parent);
+        }
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        for (SyncRecord p : parents) {
+            try {
+                Object node = mapper.readTree(p.getPayload());
+                Object v = JsonPaths.read((com.fasterxml.jackson.databind.JsonNode) node, keyPath);
+                if (v != null && !String.valueOf(v).isBlank()) keys.add(String.valueOf(v));
+            } catch (Exception ignored) {
+            }
+        }
+        int rows = 0;
+        java.util.List<SyncRecord> batch = new java.util.ArrayList<>();
+        for (String key : keys) {
+            Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("key", key);
+            ctx.put("id", key);
+            try {
+                var result = upstream.fetchList(src, ep, ctx);
+                for (ObjectNode node : result.rawRows()) {
+                    String err = detectErrorEnvelope(node);
+                    if (err != null) throw new BizException("上游返回错误，未入库: " + err);
+                    SyncRecord rec = new SyncRecord();
+                    rec.setDatasetCode(cfg.getDatasetCode());
+                    rec.setPayload(node.toString());
+                    rec.setSourceKey(extractKey(node) != null ? extractKey(node) : key);
+                    rec.setBatchId(jobId);
+                    rec.setSyncedAt(Instant.now());
+                    batch.add(rec);
+                    rows++;
+                }
+            } catch (BizException be) {
+                throw be;
+            } catch (Exception e) {
+                log.warn("related fetch failed dataset={} key={} err={}", cfg.getDatasetCode(), key, e.getMessage());
+            }
+            if (batch.size() >= 500) {
+                final List<SyncRecord> toSave = batch;
+                tx.executeWithoutResult(s -> recordRepo.saveAll(toSave));
+                batch = new java.util.ArrayList<>();
+            }
+        }
+        if (!batch.isEmpty()) {
+            final List<SyncRecord> toSave = batch;
+            tx.executeWithoutResult(s -> recordRepo.saveAll(toSave));
+        }
+        return rows;
     }
 
     /** 上游把登录失败/业务错误包成一条 JSON 时，不能当业务行入库 */

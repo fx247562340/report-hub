@@ -27,6 +27,14 @@ public class SyncConfig {
     @Column(nullable = false, columnDefinition = "text")
     private String notes = "";
 
+    /** related 模式：上游父数据集（本地已同步） */
+    @Column(length = 64)
+    private String parentDataset;
+
+    /** related 模式：父 payload 里取键的 source_path */
+    @Column(length = 255)
+    private String keyPath;
+
     @Column(nullable = false)
     private Instant updatedAt = Instant.now();
 
@@ -42,6 +50,10 @@ public class SyncConfig {
     public void setMaxPages(Integer maxPages) { this.maxPages = maxPages; }
     public String getNotes() { return notes; }
     public void setNotes(String notes) { this.notes = notes; }
+    public String getParentDataset() { return parentDataset; }
+    public void setParentDataset(String parentDataset) { this.parentDataset = parentDataset; }
+    public String getKeyPath() { return keyPath; }
+    public void setKeyPath(String keyPath) { this.keyPath = keyPath; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }

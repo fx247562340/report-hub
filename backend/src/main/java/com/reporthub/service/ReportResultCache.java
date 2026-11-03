@@ -47,7 +47,11 @@ public class ReportResultCache {
     }
 
     public String key(String reportCode, Map<String, Object> filters) {
-        return reportCode + ":" + sha256(canonical(filters));
+        return key(reportCode, filters, "");
+    }
+
+    public String key(String reportCode, Map<String, Object> filters, String mode) {
+        return reportCode + ":" + (mode == null ? "" : mode) + ":" + sha256(canonical(filters));
     }
 
     public CachedResult getFresh(String key) {

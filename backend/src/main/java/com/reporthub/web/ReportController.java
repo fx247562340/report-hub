@@ -3,6 +3,7 @@ package com.reporthub.web;
 import com.reporthub.common.ApiResponse;
 import com.reporthub.engine.ReportQueryEngine;
 import com.reporthub.service.ConfigService;
+import com.reporthub.service.QueryModeService;
 import com.reporthub.service.ReportResultCache;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -15,13 +16,16 @@ public class ReportController {
     private final ConfigService configService;
     private final ReportQueryEngine engine;
     private final ReportResultCache resultCache;
+    private final QueryModeService queryModeService;
 
     public ReportController(ConfigService configService,
                             ReportQueryEngine engine,
-                            ReportResultCache resultCache) {
+                            ReportResultCache resultCache,
+                            QueryModeService queryModeService) {
         this.configService = configService;
         this.engine = engine;
         this.resultCache = resultCache;
+        this.queryModeService = queryModeService;
     }
 
     @GetMapping
@@ -45,7 +49,7 @@ public class ReportController {
         int page = body == null ? 1 : toInt(body.get("page"), 1);
         int pageSize = body == null ? 50 : toInt(body.get("pageSize"), 50);
 
-        String cacheKey = resultCache.key(report.getCode(), filters);
+        String cacheKey = resultCache.key(report.getCode(), filters, queryModeService.mode());
         var hit = resultCache.getFresh(cacheKey);
         if (hit != null) {
             return ApiResponse.ok(resultCache.toQueryResult(hit, page, pageSize));
@@ -85,7 +89,7 @@ public class ReportController {
         Map<String, Object> filters = body == null ? Map.of() :
                 (Map<String, Object>) body.getOrDefault("filters", Map.of());
         var report = configService.getReport(code);
-        String cacheKey = resultCache.key(report.getCode(), filters);
+        String cacheKey = resultCache.key(report.getCode(), filters, queryModeService.mode());
         var full = resultCache.getOrLoad(cacheKey, () -> loadFull(report.getCode(), filters));
         byte[] bytes = com.reporthub.service.ExcelExportService.toXlsx(
                 full.columns(), full.rows(), report.getName());
