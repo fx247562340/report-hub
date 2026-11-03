@@ -35,6 +35,14 @@ public class SyncConfig {
     @Column(length = 255)
     private String keyPath;
 
+    /** keys 模式：枚举上游表全部键的 SQL（QueryInfoBySql） */
+    @Column(columnDefinition = "text")
+    private String keysSql;
+
+    /** keys 模式：执行 keys_sql 的 SQL 接口编码 */
+    @Column(length = 64)
+    private String keysEndpoint;
+
     @Column(nullable = false)
     private Instant updatedAt = Instant.now();
 
@@ -54,6 +62,10 @@ public class SyncConfig {
     public void setParentDataset(String parentDataset) { this.parentDataset = parentDataset; }
     public String getKeyPath() { return keyPath; }
     public void setKeyPath(String keyPath) { this.keyPath = keyPath; }
+    public String getKeysSql() { return keysSql; }
+    public void setKeysSql(String keysSql) { this.keysSql = keysSql; }
+    public String getKeysEndpoint() { return keysEndpoint; }
+    public void setKeysEndpoint(String keysEndpoint) { this.keysEndpoint = keysEndpoint; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }

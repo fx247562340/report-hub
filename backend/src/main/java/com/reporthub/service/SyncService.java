@@ -67,6 +67,7 @@ public class SyncService {
             m.put("mode", c.getMode());
             m.put("parentDataset", c.getParentDataset());
             m.put("keyPath", c.getKeyPath());
+            m.put("keysSql", c.getKeysSql());
             m.put("pageSize", c.getPageSize());
             m.put("maxPages", c.getMaxPages());
             m.put("recordCount", recordRepo.countByDatasetCode(c.getDatasetCode()));
@@ -114,13 +115,12 @@ public class SyncService {
                     .orElseThrow(() -> new BizException("endpoint not found: " + ds.getEndpointCode()));
             DataSourceDef src = dataSourceRepo.findById(ep.getDataSourceCode()).orElseThrow();
 
-            // 全量替换（需要事务执行 @Modifying delete）
-            tx.executeWithoutResult(s -> recordRepo.deleteByDatasetCode(cfg.getDatasetCode()));
-
-            if ("related".equalsIgnoreCase(cfg.getMode())) {
-                rows = syncRelated(cfg, jobId, src, ep);
+            if ("keys".equalsIgnoreCase(cfg.getMode()) || "related".equalsIgnoreCase(cfg.getMode())) {
+                rows = syncByKeys(cfg, jobId);
                 pages = 1;
             } else {
+            // 列表全量替换
+            tx.executeWithoutResult(s -> recordRepo.deleteByDatasetCode(cfg.getDatasetCode()));
             int pageSize = cfg.getPageSize();
             java.util.List<SyncRecord> batch = new java.util.ArrayList<>();
             for (int page = 1; page <= cfg.getMaxPages(); page++) {
@@ -182,36 +182,55 @@ public class SyncService {
     }
 
     /**
-     * 关联同步：从父数据集本地原始行取键，逐个调子接口，存子表原始行。
-     * 例：挂次 hangNo → U9 完工；完工 m_mO.m_code → 生产订单。
+     * 表级全量同步：SQL 枚举上游表全部键，再按文档接口拉原文 JSON。
+     * 不依赖业务父表，便于以后任意表做主表。
      */
-    int syncRelated(SyncConfig cfg, Long jobId, DataSourceDef src, ApiEndpointDef ep) {
-        String parent = cfg.getParentDataset();
-        String keyPath = cfg.getKeyPath();
-        if (parent == null || parent.isBlank() || keyPath == null || keyPath.isBlank()) {
-            throw new BizException("related 模式需要 parent_dataset 与 key_path");
+    int syncByKeys(SyncConfig cfg, Long jobId) throws Exception {
+        String keysSql = cfg.getKeysSql();
+        if (keysSql == null || keysSql.isBlank()) {
+            throw new BizException("keys 模式需要 keys_sql");
         }
-        List<SyncRecord> parents = recordRepo.findByDatasetCodeOrderByIdAsc(parent);
-        if (parents.isEmpty()) {
-            throw new BizException("父数据集无本地数据，请先同步: " + parent);
-        }
+        String keysEp = cfg.getKeysEndpoint() == null || cfg.getKeysEndpoint().isBlank()
+                ? "u9c_mo_so_contract" : cfg.getKeysEndpoint();
+        ApiEndpointDef sqlEp = endpointRepo.findById(keysEp)
+                .orElseThrow(() -> new BizException("keys 接口不存在: " + keysEp));
+        DataSourceDef sqlSrc = dataSourceRepo.findById(sqlEp.getDataSourceCode()).orElseThrow();
+
+        // 执行 keys SQL
+        String rendered = keysSql.replace("{{limit}}", String.valueOf(Math.max(1, cfg.getMaxPages() * cfg.getPageSize())));
+        Map<String, Object> sqlCtx = new java.util.HashMap<>();
+        sqlCtx.put("key", "keys");
+        String bodyJson = mapper.writeValueAsString(Map.of("SqlString", rendered));
+        log.info("keys sql dataset={} body={}", cfg.getDatasetCode(), bodyJson);
+        ApiEndpointDef sqlEpUse = copyWithBody(sqlEp, bodyJson);
+        var keyResult = upstream.fetchList(sqlSrc, sqlEpUse, sqlCtx);
         LinkedHashSet<String> keys = new LinkedHashSet<>();
-        for (SyncRecord p : parents) {
-            try {
-                Object node = mapper.readTree(p.getPayload());
-                Object v = JsonPaths.read((com.fasterxml.jackson.databind.JsonNode) node, keyPath);
-                if (v != null && !String.valueOf(v).isBlank()) keys.add(String.valueOf(v));
-            } catch (Exception ignored) {
+        for (ObjectNode node : keyResult.rawRows()) {
+            Object v = null;
+            for (String cand : new String[] {"key", "k", "docno", "DocNo", "docNo", "m_docNo", "code"}) {
+                if (node.has(cand) && !node.get(cand).isNull()) { v = node.get(cand); break; }
             }
+            if (v == null && node.size() == 1) v = node.elements().next();
+            if (v != null && !String.valueOf(v).isBlank()) keys.add(String.valueOf(v));
         }
+
+        DatasetDef ds = datasetRepo.findById(cfg.getDatasetCode())
+                .orElseThrow(() -> new BizException("dataset not found: " + cfg.getDatasetCode()));
+        ApiEndpointDef detailEp = endpointRepo.findById(ds.getEndpointCode())
+                .orElseThrow(() -> new BizException("endpoint not found: " + ds.getEndpointCode()));
+        DataSourceDef detailSrc = dataSourceRepo.findById(detailEp.getDataSourceCode()).orElseThrow();
+
+        // 键取到后再替换本地数据，避免失败清空
+        tx.executeWithoutResult(s -> recordRepo.deleteByDatasetCode(cfg.getDatasetCode()));
         int rows = 0;
         java.util.List<SyncRecord> batch = new java.util.ArrayList<>();
         for (String key : keys) {
+            if (rows >= cfg.getMaxPages() * cfg.getPageSize()) break;
             Map<String, Object> ctx = new java.util.HashMap<>();
             ctx.put("key", key);
             ctx.put("id", key);
             try {
-                var result = upstream.fetchList(src, ep, ctx);
+                var result = upstream.fetchList(detailSrc, detailEp, ctx);
                 for (ObjectNode node : result.rawRows()) {
                     String err = detectErrorEnvelope(node);
                     if (err != null) throw new BizException("上游返回错误，未入库: " + err);
@@ -227,7 +246,7 @@ public class SyncService {
             } catch (BizException be) {
                 throw be;
             } catch (Exception e) {
-                log.warn("related fetch failed dataset={} key={} err={}", cfg.getDatasetCode(), key, e.getMessage());
+                log.warn("keys fetch failed dataset={} key={} err={}", cfg.getDatasetCode(), key, e.getMessage());
             }
             if (batch.size() >= 500) {
                 final List<SyncRecord> toSave = batch;
@@ -239,7 +258,25 @@ public class SyncService {
             final List<SyncRecord> toSave = batch;
             tx.executeWithoutResult(s -> recordRepo.saveAll(toSave));
         }
+        log.info("keys sync done dataset={} keys={} rows={}", cfg.getDatasetCode(), keys.size(), rows);
         return rows;
+    }
+
+    private ApiEndpointDef copyWithBody(ApiEndpointDef ep, String body) {
+        ApiEndpointDef c = new ApiEndpointDef();
+        c.setCode(ep.getCode());
+        c.setDataSourceCode(ep.getDataSourceCode());
+        c.setName(ep.getName());
+        c.setMethod(ep.getMethod());
+        c.setPath(ep.getPath());
+        c.setQueryTemplate(ep.getQueryTemplate());
+        c.setBodyTemplate(body);
+        c.setBodyType("json");
+        c.setHeadersTemplate(ep.getHeadersTemplate());
+        c.setListPath(ep.getListPath());
+        c.setTotalPath(ep.getTotalPath());
+        c.setPagination(ep.getPagination());
+        return c;
     }
 
     /** 上游把登录失败/业务错误包成一条 JSON 时，不能当业务行入库 */
