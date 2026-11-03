@@ -595,7 +595,7 @@ export default function Reports() {
                       <span className={`badge ${c.kind === 'condition' ? 'warn' : 'ok'}`}>{c.kind === 'condition' ? '判断' : '计算'}</span>
                       <input className="input" placeholder="列标识 zinc_loss" value={c.key}
                         onChange={(e) => setCalcs(calcs.map((x, i) => (i === idx ? { ...x, key: e.target.value } : x)))} />
-                      <input className="input" placeholder="表头 锌耗" value={c.label}
+                      <input className="input" placeholder="表头 名称" value={c.label}
                         onChange={(e) => setCalcs(calcs.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))} />
                       <div className="row" style={{ flexWrap: 'nowrap' }}>
                         <button className="btn sm icon-only" title="上移" disabled={idx === 0}

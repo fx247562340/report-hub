@@ -7,7 +7,6 @@ import Logo from '../components/Logo'
 const menuAll: { to: string; label: string; icon: IconName; adminOnly: boolean }[] = [
   { to: '/', label: '首页', icon: 'home', adminOnly: false },
   { to: '/reports', label: '报表', icon: 'report', adminOnly: false },
-  { to: '/zn-ledger', label: '锌耗台账', icon: 'report', adminOnly: false },
   { to: '/datasources', label: '数据源', icon: 'datasource', adminOnly: true },
   { to: '/endpoints', label: '接口', icon: 'api', adminOnly: true },
   { to: '/datasets', label: '数据集', icon: 'dataset', adminOnly: true },
