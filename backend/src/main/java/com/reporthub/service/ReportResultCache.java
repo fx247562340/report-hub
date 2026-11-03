@@ -9,6 +9,9 @@ import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 /**
@@ -26,9 +29,17 @@ public class ReportResultCache {
     private final ReportHubProperties props;
     private final Map<String, CachedResult> store = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<CachedResult>> inflight = new ConcurrentHashMap<>();
+    /** 预热专用线程：避免在 ForkJoinPool.commonPool 上做阻塞 HTTP + join 导致池死锁 */
+    private final ExecutorService warmPool;
 
     public ReportResultCache(ReportHubProperties props) {
         this.props = props;
+        AtomicInteger n = new AtomicInteger();
+        this.warmPool = Executors.newFixedThreadPool(2, r -> {
+            Thread t = new Thread(r, "report-cache-warm-" + n.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     public boolean enabled() {
@@ -51,25 +62,36 @@ public class ReportResultCache {
         return c;
     }
 
-    /** 命中则返回；未命中则同步加载并写入。并发同一 key 只打一次上游。 */
+    /**
+     * 命中则返回；未命中则在当前线程同步加载并写入。
+     * 并发同一 key 只打一次上游：后到者等待先行者的 future，不再丢进 commonPool。
+     */
     public CachedResult getOrLoad(String key, Supplier<CachedResult> loader) {
         CachedResult hit = getFresh(key);
         if (hit != null) return hit;
         if (!enabled()) return loader.get();
 
-        CompletableFuture<CachedResult> f = inflight.computeIfAbsent(key, k ->
-                CompletableFuture.supplyAsync(() -> {
-                    try {
-                        CachedResult again = getFresh(k);
-                        if (again != null) return again;
-                        CachedResult r = loader.get();
-                        store.put(k, r);
-                        return r;
-                    } finally {
-                        inflight.remove(k);
-                    }
-                })
-        );
+        CompletableFuture<CachedResult> mine = new CompletableFuture<>();
+        CompletableFuture<CachedResult> existing = inflight.putIfAbsent(key, mine);
+        if (existing != null) {
+            return await(existing);
+        }
+        try {
+            CachedResult again = getFresh(key);
+            CachedResult r = again != null ? again : loader.get();
+            if (again == null) store.put(key, r);
+            mine.complete(r);
+            return r;
+        } catch (Throwable t) {
+            mine.completeExceptionally(t);
+            if (t instanceof RuntimeException re) throw re;
+            throw new RuntimeException(t);
+        } finally {
+            inflight.remove(key, mine);
+        }
+    }
+
+    private CachedResult await(CompletableFuture<CachedResult> f) {
         try {
             return f.join();
         } catch (Exception e) {
@@ -86,7 +108,7 @@ public class ReportResultCache {
     public void warmAsync(String key, Supplier<CachedResult> loader) {
         if (!enabled() || !props.getEngine().isWarmOnQuery()) return;
         if (getFresh(key) != null || inflight.containsKey(key)) return;
-        CompletableFuture.runAsync(() -> {
+        warmPool.execute(() -> {
             try {
                 Thread.sleep(1500L);
             } catch (InterruptedException e) {
