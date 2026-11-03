@@ -116,6 +116,25 @@ export default function Sync() {
     }
   }
 
+  async function stopSync(code: string) {
+    try {
+      await api.post(`/api/sync/${code}/stop`)
+      setMsg(`已请求停止 ${code}`)
+      setTimeout(load, 1000)
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  async function toggleEnabled(code: string, enabled: boolean) {
+    try {
+      await api.post(`/api/sync/${code}/enabled`, { enabled })
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
   return (
     <>
       <div className="page-head compact">
@@ -177,7 +196,7 @@ export default function Sync() {
                       {x.lastJobStatus ? (
                         <>
                           <span style={{ color: x.lastJobStatus === 'success' ? 'var(--ok)' : x.lastJobStatus === 'failed' ? 'var(--danger)' : 'var(--warn)' }}>
-                            {x.lastJobStatus === 'success' ? '成功' : x.lastJobStatus === 'failed' ? '失败' : '同步中'}
+                            {x.lastJobStatus === 'success' ? '成功' : x.lastJobStatus === 'failed' ? '失败' : x.lastJobStatus === 'cancelled' ? '已取消' : x.lastJobStatus === 'queued' ? '排队中' : '同步中'}
                           </span>
                           <span className="muted"> · {x.lastJobRows ?? 0} 行</span>
                           {x.lastJobError && <div className="muted" style={{ fontSize: 11 }}>{x.lastJobError}</div>}
@@ -188,8 +207,16 @@ export default function Sync() {
                     </td>
                     <td className="muted">{x.lastJobDurationMs != null ? `${x.lastJobDurationMs} ms` : '—'}</td>
                     <td>
-                      <button className="btn sm primary" disabled={busy === x.datasetCode} onClick={() => runSync(x.datasetCode)}>
-                        {busy === x.datasetCode ? '同步中…' : '立即同步'}
+                      {x.lastJobStatus === 'running' || x.lastJobStatus === 'queued' ? (
+                        <button className="btn sm" onClick={() => stopSync(x.datasetCode)}>停止</button>
+                      ) : (
+                        <button className="btn sm primary" disabled={busy === x.datasetCode || !x.enabled} onClick={() => runSync(x.datasetCode)}>
+                          {busy === x.datasetCode ? '同步中…' : '立即同步'}
+                        </button>
+                      )}
+                      {' '}
+                      <button className="btn sm" onClick={() => toggleEnabled(x.datasetCode, !x.enabled)}>
+                        {x.enabled ? '停用' : '启用'}
                       </button>
                     </td>
                   </tr>
@@ -227,7 +254,7 @@ export default function Sync() {
                     <td>{j.datasetCode}</td>
                     <td>
                       <span style={{ color: j.status === 'success' ? 'var(--ok)' : j.status === 'failed' ? 'var(--danger)' : 'var(--warn)' }}>
-                        {j.status === 'success' ? '成功' : j.status === 'failed' ? '失败' : '同步中'}
+                        {j.status === 'success' ? '成功' : j.status === 'failed' ? '失败' : j.status === 'cancelled' ? '已取消' : j.status === 'queued' ? '排队中' : '同步中'}
                       </span>
                     </td>
                     <td>{j.rowCount}</td>

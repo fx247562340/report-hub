@@ -29,6 +29,19 @@ public class SyncController {
         return ApiResponse.ok(syncService.listJobs());
     }
 
+    @PostMapping("/sync/{datasetCode}/stop")
+    public ApiResponse<?> stop(@PathVariable String datasetCode) {
+        syncService.requestCancel(datasetCode);
+        return ApiResponse.ok(Map.of("cancelled", datasetCode));
+    }
+
+    @PostMapping("/sync/{datasetCode}/enabled")
+    public ApiResponse<?> setEnabled(@PathVariable String datasetCode, @RequestBody Map<String, Object> body) {
+        boolean enabled = Boolean.parseBoolean(String.valueOf(body.getOrDefault("enabled", "true")));
+        syncService.setEnabled(datasetCode, enabled);
+        return ApiResponse.ok(Map.of("datasetCode", datasetCode, "enabled", enabled));
+    }
+
     @PostMapping("/sync/run-all")
     public ApiResponse<?> runAll() {
         return ApiResponse.ok(syncService.triggerAll());

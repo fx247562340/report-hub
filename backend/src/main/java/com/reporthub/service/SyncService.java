@@ -44,6 +44,33 @@ public class SyncService {
         t.setDaemon(true);
         return t;
     });
+    /** 请求取消的同步任务（datasetCode） */
+    private final java.util.Set<String> cancelRequested =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 停止某数据集的同步（排队中直接跳过，运行中尽快退出） */
+    public void requestCancel(String datasetCode) {
+        cancelRequested.add(datasetCode);
+        // 打断运行中的任务
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            if (t.getName().contains("sync-runner") || t.getName().contains("pool-")) {
+                // 不强制 interrupt 全池；仅标记后任务自查
+            }
+        }
+    }
+
+    public boolean isCancelRequested(String datasetCode) {
+        return cancelRequested.contains(datasetCode);
+    }
+
+    public void setEnabled(String datasetCode, boolean enabled) {
+        SyncConfig cfg = configRepo.findById(datasetCode)
+                .orElseThrow(() -> new BizException("未配置同步: " + datasetCode));
+        cfg.setEnabled(enabled);
+        cfg.setUpdatedAt(Instant.now());
+        configRepo.save(cfg);
+        if (!enabled) requestCancel(datasetCode);
+    }
 
     public SyncService(SyncConfigRepo configRepo, SyncJobRepo jobRepo, SyncRecordRepo recordRepo,
                        DatasetRepo datasetRepo, ApiEndpointRepo endpointRepo, DataSourceRepo dataSourceRepo,
@@ -113,6 +140,16 @@ public class SyncService {
         }
         pool.execute(() -> {
             for (int i = 0; i < plan.size(); i++) {
+                if (isCancelRequested(plan.get(i).getDatasetCode())) {
+                    SyncJob j = jobRepo.findById(jobs.get(i).getId()).orElse(null);
+                    if (j != null) {
+                        j.setStatus("cancelled");
+                        j.setFinishedAt(Instant.now());
+                        j.setError("已取消");
+                        jobRepo.save(j);
+                    }
+                    continue;
+                }
                 runJob(jobs.get(i).getId(), plan.get(i));
             }
         });
@@ -124,6 +161,7 @@ public class SyncService {
         SyncConfig cfg = configRepo.findById(datasetCode)
                 .orElseThrow(() -> new BizException("未配置同步: " + datasetCode));
         if (!Boolean.TRUE.equals(cfg.getEnabled())) throw new BizException("同步已停用: " + datasetCode);
+        cancelRequested.remove(datasetCode);
         SyncJob job = new SyncJob();
         job.setDatasetCode(datasetCode);
         job.setStatus("queued");
@@ -137,6 +175,13 @@ public class SyncService {
     void runJob(Long jobId, SyncConfig cfg) {
         SyncJob job = jobRepo.findById(jobId).orElse(null);
         if (job == null) return;
+        if (isCancelRequested(cfg.getDatasetCode())) {
+            job.setStatus("cancelled");
+            job.setFinishedAt(Instant.now());
+            job.setError("已取消");
+            jobRepo.save(job);
+            return;
+        }
         job.setStatus("running");
         jobRepo.save(job);
         long t0 = System.currentTimeMillis();
@@ -158,6 +203,9 @@ public class SyncService {
             int pageSize = cfg.getPageSize();
             java.util.List<SyncRecord> batch = new java.util.ArrayList<>();
             for (int page = 1; page <= cfg.getMaxPages(); page++) {
+                if (isCancelRequested(cfg.getDatasetCode())) {
+                    throw new InterruptedException("cancelled");
+                }
                 Map<String, Object> ctx = new java.util.LinkedHashMap<>();
                 ctx.put("page", page);
                 ctx.put("pageSize", pageSize);
@@ -204,14 +252,19 @@ public class SyncService {
             jobRepo.save(job);
             log.info("sync ok dataset={} rows={} pages={} ms={}", cfg.getDatasetCode(), rows, pages, job.getDurationMs());
         } catch (Exception e) {
-            job.setStatus("failed");
+            boolean cancelled = isCancelRequested(cfg.getDatasetCode())
+                    || e instanceof InterruptedException
+                    || (e.getMessage() != null && e.getMessage().contains("interrupt"));
+            job.setStatus(cancelled ? "cancelled" : "failed");
             job.setRowCount(rows);
             job.setPageCount(pages);
             job.setDurationMs((int) (System.currentTimeMillis() - t0));
             job.setFinishedAt(Instant.now());
-            job.setError(e.getMessage());
+            job.setError(cancelled ? "已取消" : e.getMessage());
             jobRepo.save(job);
-            log.warn("sync failed dataset={} err={}", cfg.getDatasetCode(), e.getMessage());
+            log.warn("sync {} dataset={} err={}", job.getStatus(), cfg.getDatasetCode(), e.getMessage());
+        } finally {
+            cancelRequested.remove(cfg.getDatasetCode());
         }
     }
 
@@ -276,7 +329,9 @@ public class SyncService {
 
         List<Future<?>> futures = new java.util.ArrayList<>();
         for (String key : keyList) {
+            if (isCancelRequested(cfg.getDatasetCode())) break;
             futures.add(pool.submit(() -> {
+                if (isCancelRequested(cfg.getDatasetCode())) return;
                 Map<String, Object> ctx = new java.util.HashMap<>();
                 ctx.put("key", key);
                 ctx.put("id", key);
@@ -324,6 +379,9 @@ public class SyncService {
             pending.clear();
         }
         flush.accept(rest);
+        if (isCancelRequested(cfg.getDatasetCode())) {
+            throw new InterruptedException("cancelled");
+        }
         log.info("keys sync done dataset={} keys={} rows={}", cfg.getDatasetCode(), keyList.size(), rows.get());
         return rows.get();
     }
