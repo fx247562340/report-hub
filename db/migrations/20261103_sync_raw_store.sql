@@ -51,7 +51,7 @@ INSERT INTO app_settings (key, value) VALUES ('query_mode', 'realtime')
 ON CONFLICT (key) DO NOTHING;
 
 -- 默认给已有列表型数据集开同步配置
-INSERT INTO sync_configs (dataset_code, enabled, notes)
-SELECT code, TRUE, 'auto from datasets' FROM datasets
+INSERT INTO sync_configs (dataset_code, enabled, mode, page_size, max_pages, notes, schedule_type, updated_at)
+SELECT code, TRUE, 'list', 200, 500, 'auto from datasets', 'manual', now() FROM datasets
 WHERE endpoint_code IN ('completed_hangup_list','crm_so_list')
 ON CONFLICT (dataset_code) DO NOTHING;
