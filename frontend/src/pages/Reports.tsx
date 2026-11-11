@@ -311,11 +311,11 @@ export default function Reports() {
                     <div className="muted mono" style={{ fontSize: 12 }}>{r.code}</div>
                   </td>
                   <td>{dsLabel(r.rootDataset)}</td>
-                  <td className="muted" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <td className="muted td-clip">
                     {fs.map((f) => f.label).join('、') || '-'}
                   </td>
-                  <td className="muted">{r.description || '-'}</td>
-                  <td>
+                  <td className="muted td-clip">{r.description || '-'}</td>
+                  <td className="td-actions">
                     <div className="row">
                       <Link className="btn sm" to={`/reports/${r.code}`}>查询</Link>
                       <Link className="btn sm" to={`/relations?report=${r.code}`}>关联</Link>

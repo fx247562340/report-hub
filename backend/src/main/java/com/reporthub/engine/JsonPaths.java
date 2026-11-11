@@ -98,6 +98,15 @@ public final class JsonPaths {
                 case "trim" -> s = s.trim();
                 case "upper" -> s = s.toUpperCase();
                 case "lower" -> s = s.toLowerCase();
+                case "month" -> s = s.length() >= 7 ? s.substring(0, 7) : s;
+                case "date10" -> s = s.length() >= 10 ? s.substring(0, 10) : s;
+                case "family" -> {
+                    // 归并同一产品族：物料名去掉末尾 黑件/白件 状态后缀（冷却塔（三角梁支架）黑件 → 冷却塔（三角梁支架））
+                    if (s.length() > 2 && (s.endsWith("黑件") || s.endsWith("白件"))) {
+                        String base = s.substring(0, s.length() - 2).trim();
+                        if (!base.isEmpty()) s = base;
+                    }
+                }
                 default -> {}
             }
         }

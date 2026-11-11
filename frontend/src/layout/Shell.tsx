@@ -22,23 +22,23 @@ export default function Shell() {
   const isAdmin = user?.role === 'admin'
   const menu = menuAll.filter((item) => isAdmin || !item.adminOnly)
   const [menuOpen, setMenuOpen] = useState(false)
-  const [infoOpen, setInfoOpen] = useState(false)
-  const [queryMode, setQueryMode] = useState<string>('realtime')
+  const [queryMode, setQueryMode] = useState<string>('local')
   const [modeBusy, setModeBusy] = useState(false)
 
   useEffect(() => {
     api.get<any>('/api/settings/query-mode').then((d) => {
-      setQueryMode(d?.queryMode || 'realtime')
+      setQueryMode(d?.queryMode || 'local')
     }).catch(() => {})
   }, [])
 
-  async function toggleQueryMode() {
-    if (modeBusy) return
+  async function switchQueryMode(mode: string) {
+    if (modeBusy || mode === queryMode) return
     setModeBusy(true)
-    const next = queryMode === 'local' ? 'realtime' : 'local'
     try {
-      const d = await api.post<any>('/api/settings/query-mode', { queryMode: next })
-      setQueryMode(d?.queryMode || next)
+      await api.post<any>('/api/settings/query-mode', { queryMode: mode })
+      setQueryMode(mode)
+      // 模式切换后整页重取数据（首页看板/报表查询都随模式走）
+      window.location.reload()
     } catch (e) {
       // ignore
     } finally {
@@ -54,7 +54,6 @@ export default function Shell() {
     function onDoc(e: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false)
-        setInfoOpen(false)
       }
     }
     document.addEventListener('mousedown', onDoc)
@@ -90,44 +89,23 @@ export default function Shell() {
             <NavLink to="/about">使用说明</NavLink>
           </div>
           <div className="row" ref={menuRef} style={{ position: 'relative', gap: 10 }}>
-            <div style={{ position: 'relative' }}>
+            <div className="seg" role="group" aria-label="数据模式">
               <button
-                className="pill"
-                style={{ cursor: 'pointer', border: '1px solid var(--border)' }}
-                onClick={() => {
-                  toggleQueryMode()
-                  setMenuOpen(false)
-                }}
-                title={queryMode === 'local' ? '当前：本地数据（点击切回实时聚合）' : '当前：实时聚合（点击切换为本地数据）'}
+                className={`seg-item${queryMode === 'realtime' ? ' active' : ''}`}
+                disabled={modeBusy}
+                title="每次查询实时调用 U9 / MES 接口，结果不落库"
+                onClick={() => switchQueryMode('realtime')}
               >
-                <Icon name="bolt" size={13} />
-                {queryMode === 'local' ? '本地数据' : '实时聚合'}
-                <span className={`toggle${queryMode === 'local' ? '' : ' on'}`} aria-hidden />
+                实时聚合
               </button>
-              {infoOpen && (
-                <div
-                  className="card"
-                  style={{
-                    position: 'absolute',
-                    right: 0,
-                    top: 44,
-                    width: 300,
-                    zIndex: 40,
-                    boxShadow: '0 12px 40px rgba(0,0,0,.35)',
-                    fontSize: 12,
-                  }}
-                >
-                  <b>{queryMode === 'local' ? '本地数据' : '实时聚合'}</b>
-                  <div className="muted" style={{ marginTop: 8, lineHeight: 1.5 }}>
-                    {queryMode === 'local'
-                      ? '查询本地同步库中的上游原始数据，不打 ERP / MES 接口。字段映射与关联配置不变。'
-                      : '业务数据每次查询实时调用上游 ERP / MES，结果不落库。点开关可切换到本地数据。'}
-                  </div>
-                  <button className="btn sm" style={{ marginTop: 10 }} onClick={() => navigate('/sync')}>
-                    数据同步
-                  </button>
-                </div>
-              )}
+              <button
+                className={`seg-item${queryMode === 'local' ? ' active' : ''}`}
+                disabled={modeBusy}
+                title="查询本地同步库中的原始数据，不打上游接口"
+                onClick={() => switchQueryMode('local')}
+              >
+                本地数据
+              </button>
             </div>
 
             <div style={{ position: 'relative' }}>
@@ -136,7 +114,6 @@ export default function Shell() {
                 title="个人中心"
                 onClick={() => {
                   setMenuOpen(false)
-                  setInfoOpen(false)
                   navigate('/profile')
                 }}
               >
@@ -152,7 +129,6 @@ export default function Shell() {
                 title="账号菜单"
                 onClick={() => {
                   setMenuOpen((v) => !v)
-                  setInfoOpen(false)
                 }}
               >
                 <Icon name="chevronDown" size={12} />

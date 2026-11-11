@@ -35,6 +35,10 @@ public class ReportDef {
     @Column(columnDefinition = "text")
     private String calcsJson = "[]";
 
+    /** JSON group-by spec: {"by":["month","customer"],"aggs":[{"key":"in_qty","fn":"sum","field":"in_qty"}]} */
+    @Column(columnDefinition = "text")
+    private String groupJson = "{}";
+
     /** JSON pagination options */
     @Column(columnDefinition = "text")
     private String paginationJson = "{}";
@@ -64,6 +68,8 @@ public class ReportDef {
     public void setOrderByJson(String orderByJson) { this.orderByJson = orderByJson; }
     public String getCalcsJson() { return calcsJson; }
     public void setCalcsJson(String calcsJson) { this.calcsJson = calcsJson; }
+    public String getGroupJson() { return groupJson; }
+    public void setGroupJson(String groupJson) { this.groupJson = groupJson; }
     public String getPaginationJson() { return paginationJson; }
     public void setPaginationJson(String paginationJson) { this.paginationJson = paginationJson; }
     public String getExportConfig() { return exportConfig; }

@@ -13,10 +13,13 @@ import java.util.Map;
 public class SyncController {
     private final SyncService syncService;
     private final QueryModeService modeService;
+    private final com.reporthub.service.DashboardService dashboardService;
 
-    public SyncController(SyncService syncService, QueryModeService modeService) {
+    public SyncController(SyncService syncService, QueryModeService modeService,
+                          com.reporthub.service.DashboardService dashboardService) {
         this.syncService = syncService;
         this.modeService = modeService;
+        this.dashboardService = dashboardService;
     }
 
     @GetMapping("/sync/status")
@@ -52,13 +55,16 @@ public class SyncController {
     }
 
     @PostMapping("/sync/run-all")
-    public ApiResponse<?> runAll() {
-        return ApiResponse.ok(syncService.triggerAll());
+    public ApiResponse<?> runAll(@RequestBody(required = false) java.util.Map<String, Object> body) {
+        String strategy = String.valueOf(body == null ? "incremental" : body.getOrDefault("strategy", "incremental"));
+        return ApiResponse.ok(syncService.triggerAll(strategy));
     }
 
     @PostMapping("/sync/{datasetCode}/run")
-    public ApiResponse<?> run(@PathVariable String datasetCode) {
-        return ApiResponse.ok(syncService.trigger(datasetCode));
+    public ApiResponse<?> run(@PathVariable String datasetCode,
+                              @RequestBody(required = false) java.util.Map<String, Object> body) {
+        String strategy = String.valueOf(body == null ? "incremental" : body.getOrDefault("strategy", "incremental"));
+        return ApiResponse.ok(syncService.trigger(datasetCode, strategy));
     }
 
     @GetMapping("/settings/query-mode")
@@ -68,8 +74,10 @@ public class SyncController {
 
     @PostMapping("/settings/query-mode")
     public ApiResponse<Map<String, Object>> setMode(@RequestBody Map<String, Object> body) {
-        String mode = String.valueOf(body.getOrDefault("queryMode", "realtime"));
+        String mode = String.valueOf(body.getOrDefault("queryMode", "local"));
         modeService.setMode(mode);
+        // 模式变了，首页看板缓存按旧模式算的必须作废
+        dashboardService.invalidate();
         return ApiResponse.ok(modeService.snapshot());
     }
 }

@@ -17,4 +17,7 @@ public interface SyncRecordRepo extends JpaRepository<SyncRecord, Long> {
 
     @Query("select max(r.syncedAt) from SyncRecord r where r.datasetCode = :ds")
     java.time.Instant findLastSyncedAt(@Param("ds") String datasetCode);
+
+    @Query("select r.id, r.sourceKey from SyncRecord r where r.datasetCode = :ds and r.sourceKey is not null")
+    List<Object[]> findIdKeyByDatasetCode(@Param("ds") String datasetCode);
 }

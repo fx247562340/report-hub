@@ -1,10 +1,12 @@
 package com.reporthub.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.reporthub.common.BizException;
 import com.reporthub.domain.*;
 import com.reporthub.engine.JsonPaths;
+import com.reporthub.engine.TemplateRenderer;
 import com.reporthub.engine.UpstreamClient;
 import com.reporthub.repo.*;
 import org.slf4j.Logger;
@@ -126,25 +128,36 @@ public class SyncService {
     public int tickSchedule() {
         int fired = 0;
         Instant now = Instant.now();
+        List<SyncConfig> due = new java.util.ArrayList<>();
         for (SyncConfig cfg : configRepo.findAll()) {
             if (!Boolean.TRUE.equals(cfg.getEnabled())) continue;
-            if (!"manual".equals(cfg.getScheduleType())) continue;
+            if ("manual".equals(cfg.getScheduleType())) continue;
             Instant next = cfg.getNextScheduleRun() != null ? cfg.getNextScheduleRun() : computeNextRun(cfg);
             if (next == null) continue;
             if (!next.isAfter(now)) {
-                cfg.setLastScheduleRun(now);
-                cfg.setNextScheduleRun(computeNextRun(cfg));
-                configRepo.save(cfg);
-                try {
-                    trigger(cfg.getDatasetCode());
-                    fired++;
-                    log.info("schedule fire dataset={} type={}", cfg.getDatasetCode(), cfg.getScheduleType());
-                } catch (Exception e) {
-                    log.warn("schedule trigger failed {}: {}", cfg.getDatasetCode(), e.getMessage());
-                }
+                due.add(cfg);
             } else if (cfg.getNextScheduleRun() == null) {
                 cfg.setNextScheduleRun(next);
                 configRepo.save(cfg);
+            }
+        }
+        // 与一键全同步同序：列表型先跑、keys 型按编码（complete→mo→so 即父→子），避免链式取键落空
+        due.sort((a, b) -> {
+            boolean ak = "keys".equalsIgnoreCase(a.getMode()) || "related".equalsIgnoreCase(a.getMode());
+            boolean bk = "keys".equalsIgnoreCase(b.getMode()) || "related".equalsIgnoreCase(b.getMode());
+            if (ak != bk) return ak ? 1 : -1;
+            return a.getDatasetCode().compareTo(b.getDatasetCode());
+        });
+        for (SyncConfig cfg : due) {
+            cfg.setLastScheduleRun(now);
+            cfg.setNextScheduleRun(computeNextRun(cfg));
+            configRepo.save(cfg);
+            try {
+                trigger(cfg.getDatasetCode(), "incremental");
+                fired++;
+                log.info("schedule fire dataset={} type={}", cfg.getDatasetCode(), cfg.getScheduleType());
+            } catch (Exception e) {
+                log.warn("schedule trigger failed {}: {}", cfg.getDatasetCode(), e.getMessage());
             }
         }
         return fired;
@@ -212,7 +225,7 @@ public class SyncService {
     }
 
     /** 一键全同步：列表型先跑，再 keys 型；单线程顺序执行，避免打爆上游 */
-    public List<SyncJob> triggerAll() {
+    public List<SyncJob> triggerAll(String strategy) {
         List<SyncConfig> all = new java.util.ArrayList<>(configRepo.findAll());
         all.sort((a, b) -> {
             boolean ak = "keys".equalsIgnoreCase(a.getMode());
@@ -227,10 +240,11 @@ public class SyncService {
             SyncJob job = new SyncJob();
             job.setDatasetCode(c.getDatasetCode());
             job.setStatus("queued");
-            job.setTrigger("manual");
+            job.setTrigger("full".equalsIgnoreCase(strategy) ? "manual-full" : "manual");
             jobs.add(jobRepo.save(job));
             plan.add(c);
         }
+        final String strat = strategy;
         pool.execute(() -> {
             for (int i = 0; i < plan.size(); i++) {
                 if (isCancelRequested(plan.get(i).getDatasetCode())) {
@@ -243,14 +257,14 @@ public class SyncService {
                     }
                     continue;
                 }
-                runJob(jobs.get(i).getId(), plan.get(i));
+                runJob(jobs.get(i).getId(), plan.get(i), strat);
             }
         });
         return jobs;
     }
 
-    /** 异步触发一次全量同步 */
-    public SyncJob trigger(String datasetCode) {
+    /** 异步触发一次同步；strategy = incremental（默认，只取新增并 upsert）| full（清库重写） */
+    public SyncJob trigger(String datasetCode, String strategy) {
         SyncConfig cfg = configRepo.findById(datasetCode)
                 .orElseThrow(() -> new BizException("未配置同步: " + datasetCode));
         if (!Boolean.TRUE.equals(cfg.getEnabled())) throw new BizException("同步已停用: " + datasetCode);
@@ -258,14 +272,15 @@ public class SyncService {
         SyncJob job = new SyncJob();
         job.setDatasetCode(datasetCode);
         job.setStatus("queued");
-        job.setTrigger("manual");
+        job.setTrigger("full".equalsIgnoreCase(strategy) ? "manual-full" : "manual");
         job = jobRepo.save(job);
         final Long jobId = job.getId();
-        pool.execute(() -> runJob(jobId, cfg));
+        final String strat = strategy;
+        pool.execute(() -> runJob(jobId, cfg, strat));
         return job;
     }
 
-    void runJob(Long jobId, SyncConfig cfg) {
+    void runJob(Long jobId, SyncConfig cfg, String strategy) {
         SyncJob job = jobRepo.findById(jobId).orElse(null);
         if (job == null) return;
         if (isCancelRequested(cfg.getDatasetCode())) {
@@ -280,6 +295,13 @@ public class SyncService {
         long t0 = System.currentTimeMillis();
         int rows = 0;
         int pages = 0;
+        // 增量：以上次写入时间为界（回看 2 天容错）；没有本地历史则按全量
+        boolean incremental = !"full".equalsIgnoreCase(strategy);
+        Instant sinceTs = incremental ? recordRepo.findLastSyncedAt(cfg.getDatasetCode()) : null;
+        if (sinceTs == null) incremental = false;
+        String sinceDate = sinceTs == null ? null
+                : java.time.LocalDate.ofInstant(sinceTs.minus(java.time.Duration.ofDays(2)),
+                        java.time.ZoneId.systemDefault()).toString();
         try {
             DatasetDef ds = datasetRepo.findById(cfg.getDatasetCode())
                     .orElseThrow(() -> new BizException("dataset not found: " + cfg.getDatasetCode()));
@@ -288,13 +310,17 @@ public class SyncService {
             DataSourceDef src = dataSourceRepo.findById(ep.getDataSourceCode()).orElseThrow();
 
             if ("keys".equalsIgnoreCase(cfg.getMode()) || "related".equalsIgnoreCase(cfg.getMode())) {
-                rows = syncByKeys(cfg, jobId);
+                rows = syncByKeys(cfg, jobId, incremental, sinceDate, sinceTs);
                 pages = 1;
             } else {
-            // 列表全量替换
+            // 全量：整表替换；增量：只取新增并按行 upsert
+            if (!incremental) {
             tx.executeWithoutResult(s -> recordRepo.deleteByDatasetCode(cfg.getDatasetCode()));
+            }
+            ApiEndpointDef epUse = incremental ? applyIncremental(ep, cfg.getIncrementalFilter(), sinceDate) : ep;
             int pageSize = cfg.getPageSize();
             java.util.List<SyncRecord> batch = new java.util.ArrayList<>();
+            java.util.Map<String, Long> existing = incremental ? loadKeyIds(cfg.getDatasetCode()) : java.util.Map.of();
             for (int page = 1; page <= cfg.getMaxPages(); page++) {
                 if (isCancelRequested(cfg.getDatasetCode())) {
                     throw new InterruptedException("cancelled");
@@ -305,7 +331,7 @@ public class SyncService {
                 ctx.put("size", pageSize);
                 ctx.put("limit", pageSize);
                 ctx.put("current", page);
-                var result = upstream.fetchList(src, ep, ctx);
+                var result = upstream.fetchList(src, epUse, ctx);
                 List<ObjectNode> raw = result.rawRows();
                 pages++;
                 for (ObjectNode node : raw) {
@@ -321,6 +347,10 @@ public class SyncService {
                     rec.setSourceKey(extractKey(node));
                     rec.setBatchId(jobId);
                     rec.setSyncedAt(Instant.now());
+                    if (incremental && rec.getSourceKey() != null) {
+                        Long id = existing.get(rec.getSourceKey());
+                        if (id != null) rec.setId(id);
+                    }
                     batch.add(rec);
                     rows++;
                 }
@@ -365,44 +395,32 @@ public class SyncService {
      * 表级全量同步：SQL 枚举上游表全部键，再按文档接口拉原文 JSON。
      * 不依赖业务父表，便于以后任意表做主表。
      */
-    int syncByKeys(SyncConfig cfg, Long jobId) throws Exception {
+    int syncByKeys(SyncConfig cfg, Long jobId, boolean incremental, String sinceDate, Instant sinceTs) throws Exception {
         String keysSql = cfg.getKeysSql();
-        if (keysSql == null || keysSql.isBlank()) {
-            throw new BizException("keys 模式需要 keys_sql");
-        }
-        String keysEp = cfg.getKeysEndpoint() == null || cfg.getKeysEndpoint().isBlank()
-                ? "u9c_mo_so_contract" : cfg.getKeysEndpoint();
-        ApiEndpointDef sqlEp = endpointRepo.findById(keysEp)
-                .orElseThrow(() -> new BizException("keys 接口不存在: " + keysEp));
-        DataSourceDef sqlSrc = dataSourceRepo.findById(sqlEp.getDataSourceCode()).orElseThrow();
-
-        // 执行 keys SQL
-        String rendered = keysSql.replace("{{limit}}", String.valueOf(Math.max(1, cfg.getMaxPages() * cfg.getPageSize())));
-        Map<String, Object> sqlCtx = new java.util.HashMap<>();
-        sqlCtx.put("key", "keys");
-        String bodyJson = mapper.writeValueAsString(Map.of("SqlString", rendered));
-        log.info("keys sql dataset={} body={}", cfg.getDatasetCode(), bodyJson);
-        ApiEndpointDef sqlEpUse = copyWithBody(sqlEp, bodyJson);
-        var keyResult = upstream.fetchList(sqlSrc, sqlEpUse, sqlCtx);
         LinkedHashSet<String> keys = new LinkedHashSet<>();
-        for (ObjectNode node : keyResult.rawRows()) {
-            Object v = null;
-            for (String cand : new String[] {"key", "k", "docno", "DocNo", "docNo", "m_docNo", "code"}) {
-                if (node.has(cand) && !node.get(cand).isNull()) { v = node.get(cand); break; }
-            }
-            if (v == null && node.size() == 1) v = node.elements().next();
-            String key = toPlainString(v);
-            if (key != null && !key.isBlank()) keys.add(key);
+        if (keysSql != null && !keysSql.isBlank()) {
+            keys.addAll(fetchKeysBySql(cfg, keysSql));
+        } else if (cfg.getParentDataset() != null && !cfg.getParentDataset().isBlank()) {
+            keys.addAll(fetchKeysFromParent(cfg, incremental, sinceTs));
+        } else {
+            keys.addAll(fetchKeysByList(cfg, incremental, sinceDate));
         }
-
+        // 键为空多半是键源/上游异常，不能清掉本地数据
+        if (keys.isEmpty()) {
+            if (incremental) return 0;
+            throw new BizException("键为空，已保留本地数据（检查键源配置与上游返回）");
+        }
         DatasetDef ds = datasetRepo.findById(cfg.getDatasetCode())
                 .orElseThrow(() -> new BizException("dataset not found: " + cfg.getDatasetCode()));
         ApiEndpointDef detailEp = endpointRepo.findById(ds.getEndpointCode())
                 .orElseThrow(() -> new BizException("endpoint not found: " + ds.getEndpointCode()));
         DataSourceDef detailSrc = dataSourceRepo.findById(detailEp.getDataSourceCode()).orElseThrow();
 
-        // 键取到后再替换本地数据，避免失败清空
-        tx.executeWithoutResult(s -> recordRepo.deleteByDatasetCode(cfg.getDatasetCode()));
+        // 键取到后再替换本地数据，避免失败清空；增量不删库，按行 upsert
+        final java.util.Map<String, Long> existing = incremental ? loadKeyIds(cfg.getDatasetCode()) : java.util.Map.of();
+        if (!incremental) {
+            tx.executeWithoutResult(s -> recordRepo.deleteByDatasetCode(cfg.getDatasetCode()));
+        }
 
         int limit = Math.max(1, cfg.getMaxPages() * Math.max(1, cfg.getPageSize()));
         List<String> keyList = new java.util.ArrayList<>(keys);
@@ -442,9 +460,14 @@ public class SyncService {
                         SyncRecord rec = new SyncRecord();
                         rec.setDatasetCode(cfg.getDatasetCode());
                         rec.setPayload(node.toString());
-                        rec.setSourceKey(extractKey(node) != null ? extractKey(node) : key);
+                        String sk = extractKey(node);
+                        rec.setSourceKey(sk != null && !sk.startsWith("h:") ? sk : key);
                         rec.setBatchId(jobId);
                         rec.setSyncedAt(Instant.now());
+                        if (incremental && rec.getSourceKey() != null) {
+                            Long id = existing.get(rec.getSourceKey());
+                            if (id != null) rec.setId(id);
+                        }
                         rows.incrementAndGet();
                         List<SyncRecord> toFlush = null;
                         synchronized (flushLock) {
@@ -477,6 +500,195 @@ public class SyncService {
         }
         log.info("keys sync done dataset={} keys={} rows={}", cfg.getDatasetCode(), keyList.size(), rows.get());
         return rows.get();
+    }
+
+    /** 键源一：上游 SQL 枚举（QueryInfoBySql，U9 已下架，保留给其他源） */
+    private LinkedHashSet<String> fetchKeysBySql(SyncConfig cfg, String keysSql) throws Exception {
+        String keysEp = cfg.getKeysEndpoint() == null || cfg.getKeysEndpoint().isBlank()
+                ? "u9c_mo_so_contract" : cfg.getKeysEndpoint();
+        ApiEndpointDef sqlEp = endpointRepo.findById(keysEp)
+                .orElseThrow(() -> new BizException("keys 接口不存在: " + keysEp));
+        DataSourceDef sqlSrc = dataSourceRepo.findById(sqlEp.getDataSourceCode()).orElseThrow();
+        String rendered = keysSql.replace("{{limit}}", String.valueOf(Math.max(1, cfg.getMaxPages() * cfg.getPageSize())));
+        Map<String, Object> sqlCtx = new java.util.HashMap<>();
+        sqlCtx.put("key", "keys");
+        String bodyJson = mapper.writeValueAsString(Map.of("SqlString", rendered));
+        log.info("keys sql dataset={} body={}", cfg.getDatasetCode(), bodyJson);
+        var keyResult = upstream.fetchList(sqlSrc, copyWithBody(sqlEp, bodyJson), sqlCtx);
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        for (ObjectNode node : keyResult.rawRows()) addKeyFromNode(keys, node);
+        return keys;
+    }
+
+    /** 键源二：父数据集本地行的字段（如 完工报告的 m_mO.m_code）；增量只取上次同步后新写入的父行 */
+    private LinkedHashSet<String> fetchKeysFromParent(SyncConfig cfg, boolean incremental, Instant sinceTs) {
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        String path = cfg.getKeyPath();
+        if (path == null || path.isBlank()) {
+            throw new BizException("parent_dataset 键源需要 key_path");
+        }
+        Instant floor = incremental && sinceTs != null ? sinceTs.minus(java.time.Duration.ofDays(1)) : null;
+        for (SyncRecord rec : recordRepo.findByDatasetCodeOrderByIdAsc(cfg.getParentDataset())) {
+            if (floor != null && rec.getSyncedAt() != null && rec.getSyncedAt().isBefore(floor)) continue;
+            try {
+                ObjectNode node = (ObjectNode) mapper.readTree(rec.getPayload());
+                String k = toPlainString(com.reporthub.engine.JsonPaths.read(node, path));
+                if (k != null && !k.isBlank()) keys.add(k);
+            } catch (Exception ignored) {
+            }
+        }
+        log.info("keys from parent dataset={} parent={} path={} keys={} incremental={}",
+                cfg.getDatasetCode(), cfg.getParentDataset(), path, keys.size(), incremental);
+        return keys;
+    }
+
+    /** 键源三：列表接口枚举单号（CommonEntity/Query 等）；增量给枚举请求附加时间过滤 */
+    private LinkedHashSet<String> fetchKeysByList(SyncConfig cfg, boolean incremental, String sinceDate) {
+        String keysEp = cfg.getKeysEndpoint();
+        if (keysEp == null || keysEp.isBlank()) {
+            throw new BizException("keys 模式需要 keys_sql / parent_dataset / keys_endpoint 之一");
+        }
+        ApiEndpointDef ep = endpointRepo.findById(keysEp)
+                .orElseThrow(() -> new BizException("键源接口不存在: " + keysEp));
+        if (incremental) ep = applyIncremental(ep, cfg.getIncrementalFilter(), sinceDate);
+        DataSourceDef src = dataSourceRepo.findById(ep.getDataSourceCode()).orElseThrow();
+        int limit = Math.max(1, cfg.getMaxPages() * Math.max(1, cfg.getPageSize()));
+        Map<String, Object> ctx = new java.util.HashMap<>();
+        ctx.put("page", 1);
+        ctx.put("pageSize", limit);
+        var result = upstream.fetchList(src, ep, ctx);
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        for (ObjectNode node : result.rawRows()) addKeyFromNode(keys, node);
+        log.info("keys from list dataset={} ep={} keys={}", cfg.getDatasetCode(), keysEp, keys.size());
+        return keys;
+    }
+
+    private void addKeyFromNode(LinkedHashSet<String> keys, ObjectNode node) {
+        Object v = null;
+        for (String cand : new String[] {"key", "k", "docno", "DocNo", "docNo", "m_docNo", "code"}) {
+            if (node.has(cand) && !node.get(cand).isNull()) { v = node.get(cand); break; }
+        }
+        if (v == null && node.size() == 1) v = node.elements().next();
+        String key = toPlainString(v);
+        if (key != null && !key.isBlank()) keys.add(key);
+    }
+
+    /** 现有行的 source_key → id，供增量 upsert 定位更新 */
+    private java.util.Map<String, Long> loadKeyIds(String datasetCode) {
+        java.util.Map<String, Long> out = new java.util.HashMap<>();
+        for (Object[] row : recordRepo.findIdKeyByDatasetCode(datasetCode)) {
+            out.put(String.valueOf(row[1]), ((Number) row[0]).longValue());
+        }
+        return out;
+    }
+
+    /**
+     * 增量取数：把 sync_configs.incremental_filter 合并进请求。
+     * 支持 {"queryMerge":{...}} / {"bodyMerge":{...}} / {"filtersAppend":[...]} / {"filtersAppendMonths":{...}}；
+     * 值可用 {{sinceDate}}(yyyy-mm-dd) / {{sinceCompact}}(yyyymmdd) / {{sinceYM}}(yyyymm)。
+     * 注意模板里 {{pageSize}} 这类占位符不是合法 JSON，合并前先打标记、合并后还原。
+     */
+    private ApiEndpointDef applyIncremental(ApiEndpointDef ep, String specJson, String sinceDate) {
+        if (ep == null || specJson == null || specJson.isBlank() || sinceDate == null) return ep;
+        try {
+            Map<String, Object> spec = mapper.readValue(specJson, Map.class);
+            Map<String, Object> vars = new java.util.HashMap<>();
+            vars.put("sinceDate", sinceDate);
+            vars.put("sinceCompact", sinceDate.replace("-", ""));
+            vars.put("sinceYM", sinceDate.length() >= 7 ? sinceDate.substring(0, 7).replace("-", "") : sinceDate.replace("-", ""));
+            ApiEndpointDef c = copyOf(ep);
+            if (spec.get("queryMerge") instanceof Map<?, ?> qm) {
+                c.setQueryTemplate(patchJson(c.getQueryTemplate(), obj -> {
+                    for (Map.Entry<?, ?> e : qm.entrySet()) {
+                        obj.put(String.valueOf(e.getKey()), TemplateRenderer.render(String.valueOf(e.getValue()), vars));
+                    }
+                }));
+            }
+            if (spec.get("bodyMerge") instanceof Map<?, ?> bm) {
+                c.setBodyTemplate(patchJson(c.getBodyTemplate(), obj -> {
+                    for (Map.Entry<?, ?> e : bm.entrySet()) {
+                        obj.put(String.valueOf(e.getKey()), TemplateRenderer.render(String.valueOf(e.getValue()), vars));
+                    }
+                }));
+            }
+            if (spec.get("filtersAppend") instanceof List<?> fa) {
+                String rendered = TemplateRenderer.render(mapper.writeValueAsString(fa), vars);
+                ArrayNode add = (ArrayNode) mapper.readTree(rendered);
+                c.setBodyTemplate(patchJson(c.getBodyTemplate(), obj -> appendFilters(obj, add)));
+            }
+            // U9 字符串 ge/le 过滤不可靠，改用「月前缀 like」展开：如 SM202611% 起到当月逐月一张
+            if (spec.get("filtersAppendMonths") instanceof Map<?, ?> fm) {
+                String field = String.valueOf(fm.get("Field"));
+                String prefix = fm.get("Prefix") == null ? "" : String.valueOf(fm.get("Prefix"));
+                String ym = TemplateRenderer.render(String.valueOf(fm.get("SinceYM")), vars).replace("-", "");
+                String nowYm = new java.text.SimpleDateFormat("yyyyMM").format(new java.util.Date());
+                ArrayNode add = mapper.createArrayNode();
+                while (ym.length() == 6 && ym.compareTo(nowYm) <= 0) {
+                    ObjectNode f = mapper.createObjectNode();
+                    f.put("Field", field);
+                    f.put("Operator", "like");
+                    f.put("Value", prefix + ym + "%");
+                    add.add(f);
+                    int y = Integer.parseInt(ym.substring(0, 4));
+                    int m = Integer.parseInt(ym.substring(4, 6)) + 1;
+                    if (m > 12) { m = 1; y++; }
+                    ym = String.format("%04d%02d", y, m);
+                }
+                c.setBodyTemplate(patchJson(c.getBodyTemplate(), obj -> appendFilters(obj, add)));
+            }
+            return c;
+        } catch (Exception e) {
+            log.warn("incremental filter apply failed: {}", e.getMessage());
+            return ep;
+        }
+    }
+
+    private void appendFilters(ObjectNode body, ArrayNode add) {
+        ArrayNode filters = body.has("Filters") && body.get("Filters").isArray()
+                ? (ArrayNode) body.get("Filters") : body.putArray("Filters");
+        for (com.fasterxml.jackson.databind.JsonNode n : add) filters.add(n);
+    }
+
+    /** 模板里的 {{占位符}} 不是合法 JSON：先换成标记、改完再还原 */
+    private String patchJson(String template, java.util.function.Consumer<ObjectNode> mutator) throws Exception {
+        String src = (template == null || template.isBlank()) ? "{}" : template;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"\\{\\{\\s*[\\w.]+\\s*}}\"|\\{\\{\\s*[\\w.]+\\s*}}").matcher(src);
+        List<String> restores = new java.util.ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+        int last = 0;
+        while (m.find()) {
+            String hit = m.group();
+            String marker = "__PH" + restores.size() + "__";
+            restores.add(hit);
+            sb.append(src, last, m.start()).append('"').append(marker).append('"');
+            last = m.end();
+        }
+        sb.append(src.substring(last));
+        ObjectNode obj = (ObjectNode) mapper.readTree(sb.toString());
+        mutator.accept(obj);
+        String out = obj.toString();
+        for (int i = 0; i < restores.size(); i++) {
+            out = out.replace("\"__PH" + i + "__\"", restores.get(i));
+        }
+        return out;
+    }
+
+    private ApiEndpointDef copyOf(ApiEndpointDef ep) {
+        ApiEndpointDef c = new ApiEndpointDef();
+        c.setCode(ep.getCode());
+        c.setDataSourceCode(ep.getDataSourceCode());
+        c.setName(ep.getName());
+        c.setMethod(ep.getMethod());
+        c.setPath(ep.getPath());
+        c.setQueryTemplate(ep.getQueryTemplate());
+        c.setBodyTemplate(ep.getBodyTemplate());
+        c.setBodyType(ep.getBodyType());
+        c.setHeadersTemplate(ep.getHeadersTemplate());
+        c.setListPath(ep.getListPath());
+        c.setTotalPath(ep.getTotalPath());
+        c.setPagination(ep.getPagination());
+        return c;
     }
 
     private ApiEndpointDef copyWithBody(ApiEndpointDef ep, String body) {
@@ -525,15 +737,45 @@ public class SyncService {
         return null;
     }
 
-    /** 尽力提取业务键，便于去重/排查 */
+    /** 尽力提取业务键，便于去重/排查/增量 upsert */
     static String extractKey(ObjectNode node) {
-        String[] keys = {"id", "Id", "ID", "docNo", "DocNo", "hangNo", "orderNo", "code", "barCode", "productionOrderNo"};
+        String[] keys = {"id", "Id", "ID", "docNo", "DocNo", "m_docNo", "hangNo", "orderNo", "code", "barCode", "productionOrderNo"};
         for (String k : keys) {
             if (node.has(k) && !node.get(k).isNull()) {
                 String v = node.get(k).asText("");
                 if (!v.isBlank()) return v;
             }
         }
-        return null;
+        // 行级单据：嵌套单号 + 行号（MiscRcvTrans.DocNo + DocLineNo 等）
+        String doc = null;
+        for (String cand : new String[] {"MiscRcvTrans", "Ship", "Doc", "Bill", "MiscRcv"}) {
+            if (node.get(cand) instanceof com.fasterxml.jackson.databind.node.ObjectNode o) {
+                for (String dk : new String[] {"DocNo", "docNo", "m_docNo"}) {
+                    if (o.has(dk) && !o.get(dk).isNull() && !o.get(dk).asText("").isBlank()) {
+                        doc = o.get(dk).asText("");
+                        break;
+                    }
+                }
+            }
+            if (doc != null) break;
+        }
+        String line = null;
+        for (String cand : new String[] {"DocLineNo", "LineNo", "lineNo", "m_docLineNo"}) {
+            if (node.has(cand) && !node.get(cand).isNull()) {
+                line = node.get(cand).asText("");
+                if (!line.isBlank()) break;
+            }
+        }
+        if (doc != null && line != null) return doc + "#" + line;
+        // 兜底：内容哈希（同一内容稳定；上游改动会成为新行，靠全量同步清理）
+        try {
+            var md = java.security.MessageDigest.getInstance("MD5");
+            byte[] h = md.digest(node.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder("h:");
+            for (byte b : h) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

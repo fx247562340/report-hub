@@ -76,11 +76,14 @@ public class ReportQueryEngine {
 
         // 计算列筛选（如 是否一致）必须全量取数后本地过滤，否则只会滤到当前上游页
         boolean localCalcFilter = hasLocalCalcFilter(report, req.filters());
-        QueryRequest fetchReq = localCalcFilter
+        List<RelationDef> relations = relationRepo.findByReportCodeOrderBySortAsc(report.getCode());
+        // 分组报表与 union 关系都要全量取数后在内存里汇总/合并
+        boolean hasGroup = hasGroupSpec(report);
+        boolean hasUnion = relations.stream().anyMatch(r -> "union".equalsIgnoreCase(r.getJoinType()));
+        boolean needFull = localCalcFilter || hasGroup || hasUnion;
+        QueryRequest fetchReq = needFull
                 ? new QueryRequest(req.filters(), 1, Math.max(req.pageSize(), props.getEngine().getMaxRootRows()))
                 : req;
-
-        List<RelationDef> relations = relationRepo.findByReportCodeOrderBySortAsc(report.getCode());
 
         // 本地模式：只读 sync_records 原始行，映射/关联逻辑不变
         if (queryModeService.isLocal()) {
@@ -114,23 +117,24 @@ public class ReportQueryEngine {
                 pool.shutdownNow();
             }
             for (int i = 0; i < relations.size(); i++) {
-                current = join(current, rights.get(i), relations.get(i));
+                current = combine(current, rights.get(i), relations.get(i));
             }
         } else {
             for (RelationDef rel : relations) {
                 Dataset right = fetchRelated(rel, current, fetchReq, trace, bundles);
-                current = join(current, right, rel);
+                current = combine(current, right, rel);
             }
         }
 
         List<Map<String, Object>> projected = project(current, report);
+        if (hasGroup) projected = groupRows(projected, report);
         applyCalcs(projected, report);
-        List<Map<String, Object>> all = applyInMemoryFilters(projected, req.filters());
+        List<Map<String, Object>> all = applyInMemoryFilters(projected, req.filters(), filterOps(report));
         sortRows(all, report);
 
         long total;
         List<Map<String, Object>> pageRows;
-        if (localCalcFilter) {
+        if (needFull) {
             total = all.size();
             pageRows = paginate(all, req.page(), req.pageSize());
         } else {
@@ -223,11 +227,12 @@ public class ReportQueryEngine {
         Dataset current = root;
         for (RelationDef rel : relations) {
             Dataset right = loadLocal(rel.getRightDataset(), trace, bundles);
-            current = join(current, right, rel);
+            current = combine(current, right, rel);
         }
         List<Map<String, Object>> projected = project(current, report);
+        if (hasGroupSpec(report)) projected = groupRows(projected, report);
         applyCalcs(projected, report);
-        List<Map<String, Object>> all = applyInMemoryFilters(projected, remapLocalFilters(report, req.filters()));
+        List<Map<String, Object>> all = applyInMemoryFilters(projected, remapLocalFilters(report, req.filters()), filterOps(report));
         sortRows(all, report);
         long total = all.size();
         List<Map<String, Object>> pageRows = paginate(all, req.page(), req.pageSize());
@@ -526,6 +531,19 @@ public class ReportQueryEngine {
         return List.of();
     }
 
+    /** union 关系追加行（两侧字段靠投影取值），其余走 join */
+    private Dataset combine(Dataset left, Dataset right, RelationDef rel) {
+        if ("union".equalsIgnoreCase(rel.getJoinType())) return unionRows(left, right);
+        return join(left, right, rel);
+    }
+
+    private Dataset unionRows(Dataset left, Dataset right) {
+        Dataset out = new Dataset(left.code());
+        for (Map<String, Object> r : left.rows()) out.addRow(r);
+        for (Map<String, Object> r : right.rows()) out.addRow(r);
+        return out;
+    }
+
     private Dataset join(Dataset left, Dataset right, RelationDef rel) {
         List<JoinPair> pairs = parseOn(rel.getOnFields());
         boolean toMany = "1-N".equals(rel.getCardinality()) || "N-N".equals(rel.getCardinality());
@@ -662,6 +680,112 @@ public class ReportQueryEngine {
         }
     }
 
+    private boolean hasGroupSpec(ReportDef report) {
+        Map<String, Object> spec = readJsonMap(report.getGroupJson());
+        return spec.get("by") instanceof List<?> b && !b.isEmpty()
+                || spec.get("aggs") instanceof List<?> a && !a.isEmpty();
+    }
+
+    /** groupJson: {"by":[...],"aggs":[{"key","fn","field"}]} */
+    private List<Map<String, Object>> groupRows(List<Map<String, Object>> rows, ReportDef report) {
+        Map<String, Object> spec = readJsonMap(report.getGroupJson());
+        List<String> by = new ArrayList<>();
+        if (spec.get("by") instanceof List<?> raw) {
+            for (Object o : raw) by.add(String.valueOf(o));
+        }
+        List<Map<String, Object>> aggs = new ArrayList<>();
+        if (spec.get("aggs") instanceof List<?> raw) {
+            for (Object o : raw) {
+                if (!(o instanceof Map<?, ?> m)) continue;
+                Map<String, Object> agg = new LinkedHashMap<>();
+                m.forEach((k, v) -> agg.put(String.valueOf(k), v));
+                aggs.add(agg);
+            }
+        }
+        if (by.isEmpty() && aggs.isEmpty()) return rows;
+
+        Map<String, Map<String, Object>> groups = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            String gk = by.stream()
+                    .map(f -> row.get(f) == null ? " " : String.valueOf(row.get(f)))
+                    .collect(Collectors.joining("||"));
+            Map<String, Object> acc = groups.get(gk);
+            if (acc == null) {
+                acc = new LinkedHashMap<>();
+                for (String f : by) acc.put(f, row.get(f));
+                for (Map<String, Object> agg : aggs) {
+                    String fn = String.valueOf(agg.getOrDefault("fn", "sum"));
+                    String key = String.valueOf(agg.get("key"));
+                    if ("count".equals(fn)) {
+                        acc.put(key, 0L);
+                    } else if ("join".equals(fn)) {
+                        acc.put(key, new LinkedHashSet<String>());
+                    } else {
+                        acc.put(key, 0.0d);
+                    }
+                }
+                groups.put(gk, acc);
+            }
+            for (Map<String, Object> agg : aggs) {
+                String key = String.valueOf(agg.get("key"));
+                String fn = String.valueOf(agg.getOrDefault("fn", "sum"));
+                Object v = row.get(String.valueOf(agg.get("field")));
+                if (v == null) continue;
+                if ("count".equals(fn)) {
+                    acc.put(key, ((Number) acc.get(key)).longValue() + 1L);
+                } else if ("join".equals(fn)) {
+                    String sv = String.valueOf(v).trim();
+                    if (!sv.isEmpty()) {
+                        @SuppressWarnings("unchecked")
+                        Set<String> seen = (Set<String>) acc.get(key);
+                        seen.add(sv);
+                    }
+                } else {
+                    double add = v instanceof Number n ? n.doubleValue() : Double.parseDouble(String.valueOf(v));
+                    acc.put(key, round6(((Number) acc.get(key)).doubleValue() + add));
+                }
+            }
+        }
+        for (Map<String, Object> acc : groups.values()) {
+            for (Map<String, Object> agg : aggs) {
+                if (!"join".equals(String.valueOf(agg.getOrDefault("fn", "sum")))) continue;
+                String key = String.valueOf(agg.get("key"));
+                Object v = acc.get(key);
+                if (v instanceof Set<?> seen) {
+                    acc.put(key, seen.stream().map(String::valueOf).collect(Collectors.joining(",")));
+                }
+            }
+        }
+        return new ArrayList<>(groups.values());
+    }
+
+    private static double round6(double d) {
+        return Math.round(d * 1e6) / 1e6;
+    }
+
+    /** filtersJson 里的 op（如 like），内存筛选按它决定匹配方式 */
+    private Map<String, String> filterOps(ReportDef report) {
+        Map<String, String> ops = new HashMap<>();
+        try {
+            List<Map<String, Object>> defs = mapper.readValue(
+                    report.getFiltersJson() == null ? "[]" : report.getFiltersJson(),
+                    new TypeReference<List<Map<String, Object>>>() {});
+            for (Map<String, Object> d : defs) {
+                Object k = d.get("key");
+                if (k == null) continue;
+                String op = String.valueOf(d.getOrDefault("op", d.getOrDefault("type", "")));
+                ops.put(String.valueOf(k), op);
+                // 内存筛选可能经 localField 改名（本地模式），op 要在新键名下也查得到
+                Object lf = d.get("localField");
+                if (lf != null && !String.valueOf(lf).isBlank()) {
+                    ops.put(String.valueOf(lf), op);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return ops;
+    }
+
     private List<Map<String, Object>> parseColumns(ReportDef report) {
         try {
             return mapper.readValue(report.getFieldsJson(), new TypeReference<>() {});
@@ -695,7 +819,8 @@ public class ReportQueryEngine {
         return cols;
     }
 
-    private List<Map<String, Object>> applyInMemoryFilters(List<Map<String, Object>> rows, Map<String, Object> filters) {
+    private List<Map<String, Object>> applyInMemoryFilters(List<Map<String, Object>> rows, Map<String, Object> filters,
+                                                           Map<String, String> filterOps) {
         if (filters == null || filters.isEmpty()) return rows;
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map<String, Object> row : rows) {
@@ -709,6 +834,25 @@ public class ReportQueryEngine {
                     Object cell = row.get(f.getKey());
                     if (cell == null) { ok = false; break; }
                     String cv = String.valueOf(cell);
+                    boolean monthOp = "month".equalsIgnoreCase(
+                            filterOps == null ? "" : filterOps.get(f.getKey()));
+                    // 月粒度单元格（yyyy-mm）或 op=month 的筛选：起止月均含当月
+                    if (cv.length() == 7 || monthOp) {
+                        String cm = cv.length() >= 7 ? cv.substring(0, 7) : cv;
+                        Object s = range.get("start");
+                        Object e = range.get("end");
+                        if (s != null && !String.valueOf(s).isBlank()) {
+                            String sm = String.valueOf(s);
+                            sm = sm.length() >= 7 ? sm.substring(0, 7) : sm;
+                            if (cm.compareTo(sm) < 0) { ok = false; break; }
+                        }
+                        if (e != null && !String.valueOf(e).isBlank()) {
+                            String em = String.valueOf(e);
+                            em = em.length() >= 7 ? em.substring(0, 7) : em;
+                            if (cm.compareTo(em) > 0) { ok = false; break; }
+                        }
+                        continue;
+                    }
                     String cd = cv.length() >= 10 ? cv.substring(0, 10) : cv;
                     Object s = range.get("start");
                     Object e = range.get("end");
@@ -735,8 +879,14 @@ public class ReportQueryEngine {
                 if (!row.containsKey(f.getKey())) continue;
                 Object cell = row.get(f.getKey());
                 String cv = cell == null ? null : String.valueOf(cell);
-                // 精确匹配：避免「一致」误命中「不一致」
-                if (cv == null || !cv.equals(fv)) {
+                boolean matched;
+                if ("like".equalsIgnoreCase(filterOps == null ? "" : filterOps.get(f.getKey()))) {
+                    matched = cv != null && cv.toLowerCase().contains(fv.toLowerCase());
+                } else {
+                    // 精确匹配：避免「一致」误命中「不一致」
+                    matched = cv != null && cv.equals(fv);
+                }
+                if (!matched) {
                     ok = false;
                     break;
                 }
@@ -752,11 +902,16 @@ public class ReportQueryEngine {
                     report.getOrderByJson() == null ? "[]" : report.getOrderByJson(),
                     new TypeReference<>() {});
             if (orderBy == null || orderBy.isEmpty()) return;
-            String field = orderBy.get(0).get("field");
-            boolean desc = "desc".equalsIgnoreCase(orderBy.get(0).get("dir"));
-            Comparator<Map<String, Object>> cmp = Comparator.comparing(
-                    r -> r.get(field) == null ? "" : String.valueOf(r.get(field)));
-            rows.sort(desc ? cmp.reversed() : cmp);
+            Comparator<Map<String, Object>> cmp = null;
+            for (Map<String, String> spec : orderBy) {
+                String field = spec.get("field");
+                if (field == null || field.isBlank()) continue;
+                Comparator<Map<String, Object>> one = Comparator.comparing(
+                        r -> r.get(field) == null ? "" : String.valueOf(r.get(field)));
+                if ("desc".equalsIgnoreCase(spec.get("dir"))) one = one.reversed();
+                cmp = cmp == null ? one : cmp.thenComparing(one);
+            }
+            if (cmp != null) rows.sort(cmp);
         } catch (Exception ignored) {
         }
     }

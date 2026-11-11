@@ -30,6 +30,7 @@ const CARDINALITY = [
 const JOIN_TYPE = [
   { value: 'left', label: '左连接（保留左表全部）' },
   { value: 'inner', label: '内连接（仅匹配行）' },
+  { value: 'union', label: '并集（两侧行追加，不按键关联）' },
 ]
 const FETCH_MODE = [
   { value: 'dual_list', label: '双侧列表再关联', hint: '两边各调 list，内存 hash join' },

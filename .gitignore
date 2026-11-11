@@ -26,3 +26,12 @@ tmp/
 
 # Docker local volumes
 pgdata/
+
+# Agent harness / skills (installed tooling, not app source)
+.mimocode/
+.agents/
+.claude/
+.dsh/
+.hermes/
+.opencode/
+.pi/

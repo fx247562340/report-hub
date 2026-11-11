@@ -30,7 +30,7 @@ public class QueryModeService {
         if (v != null) return v;
         synchronized (this) {
             if (cached != null) return cached;
-            v = repo.findById(KEY).map(AppSetting::getValue).orElse(REALTIME);
+            v = repo.findById(KEY).map(AppSetting::getValue).orElse(LOCAL);
             cached = v;
             return v;
         }

@@ -1,6 +1,9 @@
 package com.reporthub.web;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reporthub.common.ApiResponse;
+import com.reporthub.domain.ReportDef;
 import com.reporthub.engine.ReportQueryEngine;
 import com.reporthub.service.ConfigService;
 import com.reporthub.service.QueryModeService;
@@ -8,6 +11,7 @@ import com.reporthub.service.ReportResultCache;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -17,15 +21,18 @@ public class ReportController {
     private final ReportQueryEngine engine;
     private final ReportResultCache resultCache;
     private final QueryModeService queryModeService;
+    private final ObjectMapper mapper;
 
     public ReportController(ConfigService configService,
                             ReportQueryEngine engine,
                             ReportResultCache resultCache,
-                            QueryModeService queryModeService) {
+                            QueryModeService queryModeService,
+                            ObjectMapper mapper) {
         this.configService = configService;
         this.engine = engine;
         this.resultCache = resultCache;
         this.queryModeService = queryModeService;
+        this.mapper = mapper;
     }
 
     @GetMapping
@@ -93,13 +100,35 @@ public class ReportController {
         var full = resultCache.getOrLoad(cacheKey, () -> loadFull(report.getCode(), filters));
         byte[] bytes = com.reporthub.service.ExcelExportService.toXlsx(
                 full.columns(), full.rows(), report.getName());
-        String filename = java.net.URLEncoder.encode(report.getName() + ".xlsx", java.nio.charset.StandardCharsets.UTF_8)
+        String filename = java.net.URLEncoder.encode(
+                report.getName() + monthSuffix(report, filters) + ".xlsx", java.nio.charset.StandardCharsets.UTF_8)
                 .replace("+", "%20");
         return org.springframework.http.ResponseEntity.ok()
                 .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + filename)
                 .header(org.springframework.http.HttpHeaders.CONTENT_TYPE,
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 .body(bytes);
+    }
+
+    /** 导出文件名月份后缀：取报表 month 筛选的 yyyy-mm，如 -2026-11 */
+    private String monthSuffix(ReportDef report, Map<String, Object> filters) {
+        try {
+            List<Map<String, Object>> defs = mapper.readValue(
+                    report.getFiltersJson() == null ? "[]" : report.getFiltersJson(),
+                    new TypeReference<List<Map<String, Object>>>() {});
+            for (Map<String, Object> d : defs) {
+                String op = String.valueOf(d.getOrDefault("op", d.getOrDefault("type", "")));
+                if (!"month".equals(op)) continue;
+                Object v = filters.get(String.valueOf(d.get("key")));
+                String s = v instanceof Map<?, ?> m && m.get("start") != null
+                        ? String.valueOf(m.get("start")) : String.valueOf(v == null ? "" : v);
+                if (s.length() >= 7 && s.substring(0, 7).matches("\\d{4}-\\d{2}")) {
+                    return "-" + s.substring(0, 7);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "";
     }
 
     private ReportResultCache.CachedResult loadFull(String code, Map<String, Object> filters) {

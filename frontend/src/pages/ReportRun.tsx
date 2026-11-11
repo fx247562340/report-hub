@@ -6,7 +6,7 @@ import Icon from '../components/Icon'
 import EmptyState from '../components/EmptyState'
 import { TableSkeleton } from '../components/Skeleton'
 
-type Col = { key: string; label: string; from?: string }
+type Col = { key: string; label: string; from?: string; merge?: boolean; hidden?: boolean }
 type Filter = {
   key: string
   label: string
@@ -17,11 +17,38 @@ type Filter = {
   hidden?: boolean
   /** hidden 筛选的固定/默认值 */
   defaultValue?: string
+  /** month 筛选可选月份下限（yyyy-mm），如 2026-06 */
+  min?: string
 }
 type Trace = { mode: string; endpoint: string; url: string; rows: number; ms: number }
 
 function monthKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** 合并单元格跨度：merge 列的同值连续行合并，且不跨上一个 merge 列的分组边界 */
+function buildMergePlan(rows: any[], columns: Col[]): number[][] {
+  const n = rows.length
+  const plan: number[][] = rows.map(() => columns.map(() => 1))
+  let parentEnd: number[] = rows.map(() => n)
+  for (let c = 0; c < columns.length; c++) {
+    if (!columns[c].merge) continue
+    const key = columns[c].key
+    const end = new Array(n).fill(0)
+    let i = 0
+    while (i < n) {
+      const limit = parentEnd[i]
+      let j = i + 1
+      const cur = String(rows[i][key] ?? '')
+      while (j < limit && String(rows[j][key] ?? '') === cur) j++
+      plan[i][c] = j - i
+      for (let k = i + 1; k < j; k++) plan[k][c] = 0
+      for (let k = i; k < j; k++) end[k] = j
+      i = j
+    }
+    parentEnd = end
+  }
+  return plan
 }
 
 function monthRange(yyyyMm: string) {
@@ -33,12 +60,13 @@ function monthRange(yyyyMm: string) {
   return { start: `${yyyyMm}-01`, end: `${yyyyMm}-${String(last).padStart(2, '0')}` }
 }
 
-function buildMonthOptions() {
+function buildMonthOptions(min?: string) {
   const out: { value: string; label: string }[] = []
   const now = new Date()
   for (let i = 0; i < 24; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
     const key = monthKey(d)
+    if (min && key < min) break
     out.push({ value: key, label: `${key} 月` })
   }
   return out
@@ -121,6 +149,9 @@ export default function ReportRun() {
   const [showJump, setShowJump] = useState(true)
   const [pageInput, setPageInput] = useState('1')
 
+  const mergePlan = useMemo(() => buildMergePlan(rows, columns), [rows, columns])
+  const viewCols = useMemo(() => columns.filter((c) => !c.hidden), [columns])
+
   const pageCount = Math.max(1, Math.ceil(total / Math.max(1, pageSize)))
   const pagerItems = useMemo(() => {
     const items: (number | '…')[] = []
@@ -175,14 +206,18 @@ export default function ReportRun() {
 
   useEffect(() => {
     setValues(defaultFilters)
+    // meta 就绪后才发首次查询，且用默认筛选（如当月），避免先出一份无筛选数据
+    if (code && meta) run(1, pageSize, defaultFilters)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultFilters])
 
-  async function run(nextPage = 1, size = pageSize) {
+  async function run(nextPage = 1, size = pageSize, filtersOverride?: Record<string, any>) {
     setLoading(true)
     setError('')
     setPageInput(String(nextPage))
     try {
-      const body = { filters: buildQueryFilters(values, filtersDef), page: nextPage, pageSize: size }
+      const src = filtersOverride ?? values
+      const body = { filters: buildQueryFilters(src, filtersDef), page: nextPage, pageSize: size }
       const result = isAdmin
         ? await api.post<any>(`/api/reports/${code}/debug`, body)
         : await api.post<any>(`/api/reports/${code}/query`, body)
@@ -228,7 +263,9 @@ export default function ReportRun() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${meta?.name || code}.xlsx`
+      const cd = res.headers.get('Content-Disposition') || ''
+      const fm = /filename\*=UTF-8''([^;]+)/.exec(cd)
+      a.download = fm ? decodeURIComponent(fm[1]) : `${meta?.name || code}.xlsx`
       document.body.appendChild(a)
       a.click()
       a.remove()
@@ -239,11 +276,6 @@ export default function ReportRun() {
       setExporting(false)
     }
   }
-
-  useEffect(() => {
-    if (code) run(1, pageSize)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, filtersDef, pageSize])
 
   function setFilter(key: string, part: string, v: string) {
     setValues((prev) => {
@@ -293,7 +325,7 @@ export default function ReportRun() {
                     value={val || monthKey(new Date())}
                     onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
                   >
-                    {buildMonthOptions().map((o) => (
+                    {buildMonthOptions(f.min).map((o) => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
@@ -355,15 +387,23 @@ export default function ReportRun() {
           <table>
             <thead>
               <tr>
-                {columns.map((c) => <th key={c.key}>{c.label || c.key}</th>)}
+                {viewCols.map((c) => <th key={c.key}>{c.label || c.key}</th>)}
               </tr>
             </thead>
             <tbody>
               {rows.map((row, idx) => (
                 <tr key={idx}>
-                  {columns.map((c) => (
-                    <td key={c.key}>{row[c.key] ?? '-'}</td>
-                  ))}
+                  {columns.map((c, ci) => {
+                    if (c.hidden) return null
+                    const span = mergePlan[idx]?.[ci] ?? 1
+                    if (span === 0) return null
+                    return (
+                      <td key={c.key} rowSpan={span > 1 ? span : undefined}
+                          className={c.merge ? 'merge-cell' : undefined}>
+                        {row[c.key] ?? '-'}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}
             </tbody>

@@ -43,6 +43,10 @@ public class SyncConfig {
     @Column(length = 64)
     private String keysEndpoint;
 
+    /** 增量取数的请求合并规则（queryMerge/bodyMerge/filtersAppend，值可含 {{sinceDate}}） */
+    @Column(columnDefinition = "text")
+    private String incrementalFilter;
+
     /** manual | interval | daily | weekly */
     @Column(nullable = false, length = 16)
     private String scheduleType = "manual";
@@ -82,6 +86,8 @@ public class SyncConfig {
     public void setKeyPath(String keyPath) { this.keyPath = keyPath; }
     public String getKeysSql() { return keysSql; }
     public void setKeysSql(String keysSql) { this.keysSql = keysSql; }
+    public String getIncrementalFilter() { return incrementalFilter; }
+    public void setIncrementalFilter(String incrementalFilter) { this.incrementalFilter = incrementalFilter; }
     public String getKeysEndpoint() { return keysEndpoint; }
     public void setKeysEndpoint(String keysEndpoint) { this.keysEndpoint = keysEndpoint; }
     public String getScheduleType() { return scheduleType; }
