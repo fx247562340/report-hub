@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value          TEXT NOT NULL,
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-INSERT INTO app_settings (key, value) VALUES ('query_mode', 'realtime')
+INSERT INTO app_settings (key, value, updated_at) VALUES ('query_mode', 'local', now())
 ON CONFLICT (key) DO NOTHING;
 
 -- 默认给已有列表型数据集开同步配置
