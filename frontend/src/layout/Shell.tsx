@@ -23,7 +23,8 @@ export default function Shell() {
   const menu = menuAll.filter((item) => isAdmin || !item.adminOnly)
   const [menuOpen, setMenuOpen] = useState(false)
   const [queryMode, setQueryMode] = useState<string>('local')
-  const [modeBusy, setModeBusy] = useState(false)
+  const [modeBusy, setModeBusy] = useState<string>('')
+  const [modeError, setModeError] = useState<string>('')
 
   useEffect(() => {
     api.get<any>('/api/settings/query-mode').then((d) => {
@@ -33,16 +34,18 @@ export default function Shell() {
 
   async function switchQueryMode(mode: string) {
     if (modeBusy || mode === queryMode) return
-    setModeBusy(true)
+    setModeBusy(mode)
+    setModeError('')
     try {
       await api.post<any>('/api/settings/query-mode', { queryMode: mode })
       setQueryMode(mode)
       // 模式切换后整页重取数据（首页看板/报表查询都随模式走）
       window.location.reload()
-    } catch (e) {
-      // ignore
+    } catch (e: any) {
+      setModeError(`切换失败：${e?.message || '请重试'}`)
+      setTimeout(() => setModeError(''), 4000)
     } finally {
-      setModeBusy(false)
+      setModeBusy('')
     }
   }
   const menuRef = useRef<HTMLDivElement>(null)
@@ -92,21 +95,26 @@ export default function Shell() {
             <div className="seg" role="group" aria-label="数据模式">
               <button
                 className={`seg-item${queryMode === 'realtime' ? ' active' : ''}`}
-                disabled={modeBusy}
+                disabled={modeBusy !== ''}
                 title="每次查询实时调用 U9 / MES 接口，结果不落库"
                 onClick={() => switchQueryMode('realtime')}
               >
-                实时聚合
+                {modeBusy === 'realtime' ? '切换中…' : '实时聚合'}
               </button>
               <button
                 className={`seg-item${queryMode === 'local' ? ' active' : ''}`}
-                disabled={modeBusy}
+                disabled={modeBusy !== ''}
                 title="查询本地同步库中的原始数据，不打上游接口"
                 onClick={() => switchQueryMode('local')}
               >
-                本地数据
+                {modeBusy === 'local' ? '切换中…' : '本地数据'}
               </button>
             </div>
+            {modeError && (
+              <div className="error-banner" style={{ position: 'absolute', right: 0, top: 40, zIndex: 50, fontSize: 12, padding: '8px 12px' }}>
+                {modeError}
+              </div>
+            )}
 
             <div style={{ position: 'relative' }}>
               <button
