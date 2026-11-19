@@ -86,7 +86,14 @@ function buildQueryFilters(values: Record<string, any>, filtersDef: Filter[]) {
   }
   for (const [k, v] of Object.entries(values)) {
     if (v && typeof v === 'object' && !Array.isArray(v)) {
-      filters[k] = v
+      const copy: Record<string, any> = { ...v }
+      // date-only 结束日补当天 23:59:59：语义=「含当天全天」，且默认当天区间才查得到今天的行
+      if (typeof copy.end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(copy.end)
+          && typeof copy.start === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(copy.start)
+          && copy.end >= copy.start) {
+        copy.end = copy.end + ' 23:59:59'
+      }
+      filters[k] = copy
       continue
     }
     if (typeof v === 'string' && /^\d{4}-\d{2}$/.test(v)) {
@@ -192,6 +199,7 @@ export default function ReportRun() {
   }, [code])
 
   const defaultFilters = useMemo(() => {
+    const today = monthKey(new Date()) + '-' + String(new Date().getDate()).padStart(2, '0')
     const init: Record<string, any> = {}
     for (const f of filtersDef) {
       if (f.hidden) {
@@ -199,9 +207,11 @@ export default function ReportRun() {
         continue
       }
       if (f.op === 'month' || f.type === 'month') {
+        // 月筛选默认当月
         init[f.key] = monthKey(new Date())
       } else if (f.op === 'date_range' || f.type === 'date_range') {
-        init[f.key] = { start: '', end: '' }
+        // 日期区间默认当天（列表默认不查全部）
+        init[f.key] = { start: today, end: today }
       } else {
         init[f.key] = ''
       }
@@ -378,26 +388,30 @@ export default function ReportRun() {
                     />
                   </>
                 ) : ((f.op === 'select' || f.type === 'select' || f.dynamic) && (f.options?.length || dynOptionsFor(f).length)) ? (
-                  <select
-                    className="select"
-                    value={val || ''}
-                    onChange={(e) => {
-                      const v = e.target.value
-                      setValues((prev) => {
-                        const next = { ...prev, [f.key]: v }
-                        // 级联父级变化时清空子筛选的选中值
-                        for (const child of filtersDef) {
-                          if (child.cascade === f.key) next[child.key] = ''
-                        }
-                        return next
-                      })
-                    }}
-                  >
-                    <option value="">全部</option>
-                    {dynOptionsFor(f).map((o) => (
-                      <option key={String(o.value)} value={o.value}>{o.label || o.value}</option>
-                    ))}
-                  </select>
+                  <>
+                    <input
+                      className="input"
+                      list={`dl-${code}-${f.key}`}
+                      placeholder="输入可搜索"
+                      value={val || ''}
+                      onChange={(e) => {
+                        const v = e.target.value
+                        setValues((prev) => {
+                          const next = { ...prev, [f.key]: v }
+                          // 级联父级变化时清空子筛选的选中值
+                          for (const child of filtersDef) {
+                            if (child.cascade === f.key) next[child.key] = ''
+                          }
+                          return next
+                        })
+                      }}
+                    />
+                    <datalist id={`dl-${code}-${f.key}`}>
+                      {dynOptionsFor(f).map((o) => (
+                        <option key={String(o.value)} value={o.value}>{o.label || o.value}</option>
+                      ))}
+                    </datalist>
+                  </>
                 ) : (
                   <input
                     className="input"

@@ -3,6 +3,17 @@
 # 访问 http://服务器IP:15173 ；API/PG 不对公网开放
 
 services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: report-hub-redis
+    # 不映射宿主机端口，仅 compose 内网
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   db:
     image: postgres:16-alpine
     container_name: report-hub-pg
@@ -33,9 +44,13 @@ services:
       SEED_DEMO: "true"
       JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx2048m}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
     # 不映射宿主机端口；由 web (Nginx) 反代 /api
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health | grep -q ok || exit 1"]
