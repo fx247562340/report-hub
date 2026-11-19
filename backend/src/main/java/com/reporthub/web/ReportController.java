@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reporthub.common.ApiResponse;
 import com.reporthub.domain.ReportDef;
 import com.reporthub.engine.ReportQueryEngine;
+import com.reporthub.repo.DatasetRepo;
+import com.reporthub.repo.FieldMappingRepo;
+import com.reporthub.repo.SyncRecordRepo;
 import com.reporthub.service.ConfigService;
 import com.reporthub.service.QueryModeService;
 import com.reporthub.service.ReportResultCache;
@@ -22,17 +25,20 @@ public class ReportController {
     private final ReportResultCache resultCache;
     private final QueryModeService queryModeService;
     private final ObjectMapper mapper;
+    private final SyncRecordRepo syncRecordRepo;
 
     public ReportController(ConfigService configService,
                             ReportQueryEngine engine,
                             ReportResultCache resultCache,
                             QueryModeService queryModeService,
-                            ObjectMapper mapper) {
+                            ObjectMapper mapper,
+                            SyncRecordRepo syncRecordRepo) {
         this.configService = configService;
         this.engine = engine;
         this.resultCache = resultCache;
         this.queryModeService = queryModeService;
         this.mapper = mapper;
+        this.syncRecordRepo = syncRecordRepo;
     }
 
     @GetMapping
@@ -44,6 +50,88 @@ public class ReportController {
     public ApiResponse<Map<String, Object>> meta(@PathVariable String code) {
         return ApiResponse.ok(configService.reportMeta(code));
     }
+
+    /**
+     * 级联下拉选项：取根数据集本地行中指定投影列的去重值。
+     * depends 指定父筛选列（如 customer_name），values 传父选中值做过滤（物料随客户联动）。
+     * 原始字段名经 field_mappings 反查（投影 key customer_name ← 原始 allcustomername）。
+     */
+    @GetMapping("/{code}/options")
+    public ApiResponse<List<String>> options(@PathVariable String code,
+                                             @RequestParam String field,
+                                             @RequestParam(required = false) String depends,
+                                             @RequestParam(required = false, name = "dependsValue") String dependsValue) {
+        ReportDef report = configService.getReport(code);
+        DatasetRepo datasetRepo = datasetRepo();
+        var mappings = fieldMappingRepo().findByDatasetCodeOrderBySortAsc(report.getRootDataset());
+        java.util.function.Function<String, String> srcOf = (String key) -> {
+            for (var m : mappings) {
+                if (key.equals(m.getTargetField())) return m.getSourcePath();
+            }
+            return null;
+        };
+        String srcPath = srcOf.apply(field);
+        if (srcPath == null || srcPath.isBlank()) return ApiResponse.ok(List.of());
+
+        String depSrcPath = null;
+        java.util.Set<String> depValues = null;
+        if (depends != null && !depends.isBlank() && dependsValue != null && !dependsValue.isBlank()) {
+            depSrcPath = srcOf.apply(depends);
+            depValues = new java.util.HashSet<>();
+            for (String v : dependsValue.split(",")) {
+                String t = v.trim();
+                if (!t.isEmpty()) depValues.add(t);
+            }
+        }
+
+        String datasetCode = report.getRootDataset();
+        java.util.Set<String> out = new java.util.TreeSet<>();
+        int scanned = 0;
+        for (com.reporthub.domain.SyncRecord rec : syncRecordRepo.findByDatasetCodeOrderByIdAsc(datasetCode)) {
+            try {
+                com.fasterxml.jackson.databind.node.ObjectNode node =
+                        (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(rec.getPayload());
+                if (depValues != null && depSrcPath != null) {
+                    String dep = textOf(com.reporthub.engine.JsonPaths.read(node, depSrcPath));
+                    // 父列可能逗号多值（一挂多客户），任意包含即算命中
+                    boolean hit = false;
+                    for (String part : dep.split("[,，]")) {
+                        String p = part.trim();
+                        if (depValues.contains(p)) { hit = true; break; }
+                    }
+                    if (!hit) continue;
+                }
+                String v = textOf(com.reporthub.engine.JsonPaths.read(node, srcPath));
+                if (v != null && !v.isBlank()) {
+                    for (String part : v.split("[,，]")) {
+                        String p = part.trim();
+                        // 过滤测试值与序列化空值（ceshi / 字面量 null / 纯数字编码）
+                        if (p.isEmpty() || "null".equalsIgnoreCase(p) || "ceshi".equalsIgnoreCase(p)
+                                || p.matches("\\d+")) continue;
+                        out.add(p);
+                    }
+                }
+                if (++scanned >= 20000) break;
+            } catch (Exception ignored) {
+            }
+        }
+        return ApiResponse.ok(new java.util.ArrayList<>(out));
+    }
+
+    private String textOf(Object v) {
+        return v == null ? null : String.valueOf(v);
+    }
+
+    private DatasetRepo datasetRepo() {
+        return applicationContext.getBean(DatasetRepo.class);
+    }
+
+    private FieldMappingRepo fieldMappingRepo() {
+        return applicationContext.getBean(FieldMappingRepo.class);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.context.ApplicationContext applicationContext;
 
     @PostMapping("/{code}/query")
     public ApiResponse<ReportQueryEngine.QueryResult> query(

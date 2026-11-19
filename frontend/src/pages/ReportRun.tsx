@@ -19,6 +19,10 @@ type Filter = {
   defaultValue?: string
   /** month 筛选可选月份下限（yyyy-mm），如 2026-06 */
   min?: string
+  /** 动态下拉：选项从 /options 接口拉取 */
+  dynamic?: boolean
+  /** 级联父筛选 key（本下拉选项随父选中值过滤） */
+  cascade?: string
 }
 type Trace = { mode: string; endpoint: string; url: string; rows: number; ms: number }
 
@@ -136,6 +140,7 @@ export default function ReportRun() {
   const [columns, setColumns] = useState<Col[]>([])
   const [filtersDef, setFiltersDef] = useState<Filter[]>([])
   const [values, setValues] = useState<Record<string, any>>({})
+  const [dynOptions, setDynOptions] = useState<Record<string, { value: string; label: string }[]>>({})
   const [rows, setRows] = useState<any[]>([])
   const [trace, setTrace] = useState<Trace[]>([])
   const [page, setPage] = useState(1)
@@ -210,6 +215,35 @@ export default function ReportRun() {
     if (code && meta) run(1, pageSize, defaultFilters)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultFilters])
+
+  // 动态下拉选项：无级联的（客户）加载一次；级联的（物料）随父选中值变化重新加载并清空本项选中
+  useEffect(() => {
+    if (!code || !meta) return
+    for (const f of filtersDef) {
+      if (!f.dynamic) continue
+      const parentKey = f.cascade
+      const parentVal = parentKey ? String(values[parentKey] ?? '') : ''
+      const cached = dynOptions[`${f.key}::${parentVal}`]
+      if (cached) continue
+      const qs = new URLSearchParams({ field: f.key })
+      if (parentKey && parentVal) {
+        qs.set('depends', parentKey)
+        qs.set('dependsValue', parentVal)
+      }
+      api.get<any>(`/api/reports/${code}/options?${qs.toString()}`).then((list) => {
+        const opts = (list || []).map((v: string) => ({ value: v, label: v }))
+        setDynOptions((prev) => ({ ...prev, [`${f.key}::${parentVal}`]: opts }))
+      }).catch(() => {})
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, meta, filtersDef, values])
+
+  function dynOptionsFor(f: Filter): { value: string; label: string }[] {
+    if (!f.dynamic) return f.options || []
+    const parentKey = f.cascade
+    const parentVal = parentKey ? String(values[parentKey] ?? '') : ''
+    return dynOptions[`${f.key}::${parentVal}`] || []
+  }
 
   async function run(nextPage = 1, size = pageSize, filtersOverride?: Record<string, any>) {
     setLoading(true)
@@ -343,14 +377,24 @@ export default function ReportRun() {
                       onChange={(v) => setFilter(f.key, 'end', v)}
                     />
                   </>
-                ) : (f.op === 'select' || f.type === 'select') && f.options?.length ? (
+                ) : ((f.op === 'select' || f.type === 'select' || f.dynamic) && (f.options?.length || dynOptionsFor(f).length)) ? (
                   <select
                     className="select"
                     value={val || ''}
-                    onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setValues((prev) => {
+                        const next = { ...prev, [f.key]: v }
+                        // 级联父级变化时清空子筛选的选中值
+                        for (const child of filtersDef) {
+                          if (child.cascade === f.key) next[child.key] = ''
+                        }
+                        return next
+                      })
+                    }}
                   >
                     <option value="">全部</option>
-                    {f.options.map((o) => (
+                    {dynOptionsFor(f).map((o) => (
                       <option key={String(o.value)} value={o.value}>{o.label || o.value}</option>
                     ))}
                   </select>
