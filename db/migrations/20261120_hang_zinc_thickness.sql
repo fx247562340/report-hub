@@ -133,3 +133,7 @@ WHERE code = 'ds_mes_zinc_thickness';
 
 UPDATE relations SET fetch_config = '{"keyField":"hang_no","concurrency":8,"rightEndpoint":"mes_zinc_thickness"}', updated_at = now()
 WHERE code = 'rel_hang_zinc';
+
+-- 修正：child_lookup(fetchByKeys) 读取的是 endpoint/detailEndpoint 键，不是 rightEndpoint
+UPDATE relations SET fetch_config = '{"keyField":"hang_no","concurrency":8,"endpoint":"mes_zinc_thickness"}', updated_at = now()
+WHERE code = 'rel_hang_zinc';
