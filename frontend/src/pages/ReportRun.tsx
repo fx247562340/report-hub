@@ -111,6 +111,99 @@ const MODE_LABEL: Record<string, string> = {
   child_lookup: '逐条单查',
 }
 
+/** 可搜索下拉：样式与 select 一致（点击展开选项面板），面板顶部有过滤输入框，点击选项选中 */
+function ComboSelect({ code, f, value, options, onPick, onClear }: {
+  code: string
+  f: Filter
+  value?: string
+  options: { value: string; label: string }[]
+  onPick: (v: string) => void
+  onClear: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false)
+        setQuery('')
+      }
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [])
+
+  const kw = query.trim().toLowerCase()
+  const filtered = kw ? options.filter((o) => String(o.label || o.value).toLowerCase().includes(kw)) : options
+  const display = value || '全部'
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className="select"
+        style={{ textAlign: 'left', cursor: 'pointer', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        onClick={() => { setOpen((v) => !v); setQuery('') }}
+        title={value || '全部'}
+      >
+        {display}
+      </button>
+      {open && (
+        <div
+          className="card"
+          style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 60,
+            width: 260, maxHeight: 320, overflow: 'auto', padding: 6,
+            boxShadow: '0 12px 40px rgba(0,0,0,.35)', fontSize: 12,
+          }}
+        >
+          <input
+            className="input"
+            autoFocus
+            placeholder="输入关键字过滤…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            style={{ marginBottom: 6, padding: '7px 10px' }}
+          />
+          <div
+            onClick={onClear}
+            style={{ padding: '7px 10px', borderRadius: 8, cursor: 'pointer', color: 'var(--muted)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,.05)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            全部
+          </div>
+          {filtered.map((o) => (
+            <div
+              key={String(o.value)}
+              onClick={() => { onPick(String(o.value)); setOpen(false); setQuery('') }}
+              style={{
+                padding: '7px 10px', borderRadius: 8, cursor: 'pointer',
+                background: o.value === value ? 'var(--accent-soft)' : 'transparent',
+                color: o.value === value ? 'var(--accent)' : 'var(--text)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+              onMouseEnter={(e) => {
+                if (o.value !== value) e.currentTarget.style.background = 'rgba(255,255,255,.05)'
+              }}
+              onMouseLeave={(e) => {
+                if (o.value !== value) e.currentTarget.style.background = 'transparent'
+              }}
+            >
+              {o.label || o.value}
+            </div>
+          ))}
+          {filtered.length === 0 && (
+            <div style={{ padding: '7px 10px', color: 'var(--muted)' }}>无匹配项</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function DateInput({ value, onChange, placeholder }: {
   value?: string
   onChange: (v: string) => void
@@ -388,30 +481,31 @@ export default function ReportRun() {
                     />
                   </>
                 ) : ((f.op === 'select' || f.type === 'select' || f.dynamic) && (f.options?.length || dynOptionsFor(f).length)) ? (
-                  <>
-                    <input
-                      className="input"
-                      list={`dl-${code}-${f.key}`}
-                      placeholder="输入可搜索"
-                      value={val || ''}
-                      onChange={(e) => {
-                        const v = e.target.value
-                        setValues((prev) => {
-                          const next = { ...prev, [f.key]: v }
-                          // 级联父级变化时清空子筛选的选中值
-                          for (const child of filtersDef) {
-                            if (child.cascade === f.key) next[child.key] = ''
-                          }
-                          return next
-                        })
-                      }}
-                    />
-                    <datalist id={`dl-${code}-${f.key}`}>
-                      {dynOptionsFor(f).map((o) => (
-                        <option key={String(o.value)} value={o.value}>{o.label || o.value}</option>
-                      ))}
-                    </datalist>
-                  </>
+                  <ComboSelect
+                    code={code}
+                    f={f}
+                    value={val || ''}
+                    options={dynOptionsFor(f)}
+                    onPick={(v) => {
+                      setValues((prev) => {
+                        const next = { ...prev, [f.key]: v }
+                        // 级联父级变化时清空子筛选的选中值
+                        for (const child of filtersDef) {
+                          if (child.cascade === f.key) next[child.key] = ''
+                        }
+                        return next
+                      })
+                    }}
+                    onClear={() => {
+                      setValues((prev) => {
+                        const next = { ...prev, [f.key]: '' }
+                        for (const child of filtersDef) {
+                          if (child.cascade === f.key) next[child.key] = ''
+                        }
+                        return next
+                      })
+                    }}
+                  />
                 ) : (
                   <input
                     className="input"
