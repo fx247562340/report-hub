@@ -5,6 +5,7 @@ import { api, ensureAuthorized, getUser } from '../api/client'
 import Icon from '../components/Icon'
 import EmptyState from '../components/EmptyState'
 import { TableSkeleton } from '../components/Skeleton'
+import ContractScrollReport from './ContractScrollReport'
 
 type Col = { key: string; label: string; from?: string; merge?: boolean; hidden?: boolean }
 type Filter = {
@@ -235,6 +236,13 @@ function DateInput({ value, onChange, placeholder }: {
 
 export default function ReportRun() {
   const { code = '' } = useParams()
+  if (code === 'rpt_contract_scroll') {
+    return <ContractScrollReport code={code} />
+  }
+  return <GenericReportRun code={code} />
+}
+
+function GenericReportRun({ code }: { code: string }) {
   const isAdmin = getUser()?.role === 'admin'
   const [meta, setMeta] = useState<any>(null)
   const [columns, setColumns] = useState<Col[]>([])

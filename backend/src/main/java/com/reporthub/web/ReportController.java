@@ -27,6 +27,7 @@ public class ReportController {
     private final ObjectMapper mapper;
     private final SyncRecordRepo syncRecordRepo;
     private final com.reporthub.service.FilterOptionService filterOptionService;
+    private final com.reporthub.service.ContractScrollService contractScrollService;
 
     public ReportController(ConfigService configService,
                             ReportQueryEngine engine,
@@ -34,7 +35,8 @@ public class ReportController {
                             QueryModeService queryModeService,
                             ObjectMapper mapper,
                             SyncRecordRepo syncRecordRepo,
-                            com.reporthub.service.FilterOptionService filterOptionService) {
+                            com.reporthub.service.FilterOptionService filterOptionService,
+                            com.reporthub.service.ContractScrollService contractScrollService) {
         this.configService = configService;
         this.engine = engine;
         this.resultCache = resultCache;
@@ -42,6 +44,7 @@ public class ReportController {
         this.mapper = mapper;
         this.syncRecordRepo = syncRecordRepo;
         this.filterOptionService = filterOptionService;
+        this.contractScrollService = contractScrollService;
     }
 
     @GetMapping
@@ -117,10 +120,15 @@ public class ReportController {
         Map<String, Object> filters = body == null ? Map.of() :
                 (Map<String, Object>) body.getOrDefault("filters", Map.of());
         var report = configService.getReport(code);
-        String cacheKey = resultCache.key(report.getCode(), filters, queryModeService.mode());
-        var full = resultCache.getOrLoad(cacheKey, () -> loadFull(report.getCode(), filters));
-        byte[] bytes = com.reporthub.service.ExcelExportService.toXlsx(
-                full.columns(), full.rows(), report.getName());
+        byte[] bytes;
+        if (com.reporthub.service.ContractScrollService.REPORT_CODE.equals(code)) {
+            bytes = contractScrollService.exportXlsx(filters);
+        } else {
+            String cacheKey = resultCache.key(report.getCode(), filters, queryModeService.mode());
+            var full = resultCache.getOrLoad(cacheKey, () -> loadFull(report.getCode(), filters));
+            bytes = com.reporthub.service.ExcelExportService.toXlsx(
+                    full.columns(), full.rows(), report.getName());
+        }
         String filename = java.net.URLEncoder.encode(
                 report.getName() + monthSuffix(report, filters) + ".xlsx", java.nio.charset.StandardCharsets.UTF_8)
                 .replace("+", "%20");

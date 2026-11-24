@@ -92,24 +92,30 @@ export default function Shell() {
             <NavLink to="/about">使用说明</NavLink>
           </div>
           <div className="row" ref={menuRef} style={{ position: 'relative', gap: 10 }}>
-            <div className="seg" role="group" aria-label="数据模式">
-              <button
-                className={`seg-item${queryMode === 'realtime' ? ' active' : ''}`}
-                disabled={modeBusy !== ''}
-                title="每次查询实时调用 U9 / MES 接口，结果不落库"
-                onClick={() => switchQueryMode('realtime')}
-              >
-                {modeBusy === 'realtime' ? '切换中…' : '实时聚合'}
-              </button>
-              <button
-                className={`seg-item${queryMode === 'local' ? ' active' : ''}`}
-                disabled={modeBusy !== ''}
-                title="查询本地同步库中的原始数据，不打上游接口"
-                onClick={() => switchQueryMode('local')}
-              >
-                {modeBusy === 'local' ? '切换中…' : '本地数据'}
-              </button>
-            </div>
+            {isAdmin ? (
+              <div className="seg" role="group" aria-label="数据模式">
+                <button
+                  className={`seg-item${queryMode === 'realtime' ? ' active' : ''}`}
+                  disabled={modeBusy !== ''}
+                  title="每次查询实时调用 U9 / MES 接口，结果不落库"
+                  onClick={() => switchQueryMode('realtime')}
+                >
+                  {modeBusy === 'realtime' ? '切换中…' : '实时聚合'}
+                </button>
+                <button
+                  className={`seg-item${queryMode === 'local' ? ' active' : ''}`}
+                  disabled={modeBusy !== ''}
+                  title="查询本地同步库中的原始数据，不打上游接口"
+                  onClick={() => switchQueryMode('local')}
+                >
+                  {modeBusy === 'local' ? '切换中…' : '本地数据'}
+                </button>
+              </div>
+            ) : (
+              <span className="pill" title="全局查询模式由管理员配置">
+                {queryMode === 'realtime' ? '实时聚合' : '本地数据'}
+              </span>
+            )}
             {modeError && (
               <div className="error-banner" style={{ position: 'absolute', right: 0, top: 40, zIndex: 50, fontSize: 12, padding: '8px 12px' }}>
                 {modeError}

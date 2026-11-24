@@ -21,6 +21,7 @@ public class DashboardService {
     private final ConfigService configService;
     private final ReportQueryEngine engine;
     private final ReportResultCache resultCache;
+    private final QueryModeService queryModeService;
     private final ReportHubProperties props;
     private final ObjectMapper mapper;
 
@@ -33,12 +34,14 @@ public class DashboardService {
                             ConfigService configService,
                             ReportQueryEngine engine,
                             ReportResultCache resultCache,
+                            QueryModeService queryModeService,
                             ReportHubProperties props,
                             ObjectMapper mapper) {
         this.widgetRepo = widgetRepo;
         this.configService = configService;
         this.engine = engine;
         this.resultCache = resultCache;
+        this.queryModeService = queryModeService;
         this.props = props;
         this.mapper = mapper;
     }
@@ -247,7 +250,7 @@ public class DashboardService {
             try {
                 ReportDef report = configService.getReport(w.getReportCode());
                 Map<String, Object> filters = buildFilters(report, w);
-                String ck = resultCache.key(report.getCode(), filters);
+                String ck = resultCache.key(report.getCode(), filters, queryModeService.mode());
                 ReportQueryEngine.QueryResult result = light.get(ck);
                 if (result == null) {
                     result = engine.query(report, ReportQueryEngine.QueryRequest.of(filters, 1, 1));
@@ -273,7 +276,7 @@ public class DashboardService {
             try {
                 ReportDef report = configService.getReport(w.getReportCode());
                 Map<String, Object> filters = buildFilters(report, w);
-                String ck = resultCache.key(report.getCode(), filters);
+                String ck = resultCache.key(report.getCode(), filters, queryModeService.mode());
                 ReportQueryEngine.QueryResult result = full.get(ck);
                 if (result == null) {
                     var cached = resultCache.getFresh(ck);

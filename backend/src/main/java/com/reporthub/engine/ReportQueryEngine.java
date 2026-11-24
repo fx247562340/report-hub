@@ -6,6 +6,7 @@ import com.reporthub.common.BizException;
 import com.reporthub.config.ReportHubProperties;
 import com.reporthub.domain.*;
 import com.reporthub.repo.*;
+import com.reporthub.service.ContractScrollService;
 import com.reporthub.service.QueryModeService;
 import com.reporthub.service.SyncStore;
 import org.springframework.http.HttpStatus;
@@ -27,6 +28,7 @@ public class ReportQueryEngine {
     private final ReportHubProperties props;
     private final SyncStore syncStore;
     private final QueryModeService queryModeService;
+    private final ContractScrollService contractScrollService;
 
     public ReportQueryEngine(ObjectMapper mapper,
                              UpstreamClient upstream,
@@ -37,7 +39,8 @@ public class ReportQueryEngine {
                              RelationRepo relationRepo,
                              ReportHubProperties props,
                              SyncStore syncStore,
-                             QueryModeService queryModeService) {
+                             QueryModeService queryModeService,
+                             ContractScrollService contractScrollService) {
         this.mapper = mapper;
         this.upstream = upstream;
         this.dataSourceRepo = dataSourceRepo;
@@ -48,6 +51,7 @@ public class ReportQueryEngine {
         this.props = props;
         this.syncStore = syncStore;
         this.queryModeService = queryModeService;
+        this.contractScrollService = contractScrollService;
     }
 
     public record QueryRequest(Map<String, Object> filters, int page, int pageSize) {
@@ -70,6 +74,9 @@ public class ReportQueryEngine {
     public record JoinPair(String leftField, String rightField) {}
 
     public QueryResult query(ReportDef report, QueryRequest req) {
+        if (ContractScrollService.REPORT_CODE.equals(report.getCode())) {
+            return contractScrollService.queryAsEngineResult(req.filters(), req.page(), req.pageSize());
+        }
         long t0 = System.currentTimeMillis();
         List<TraceCall> trace = new ArrayList<>();
         List<FieldRuleBundle> bundles = loadRules();

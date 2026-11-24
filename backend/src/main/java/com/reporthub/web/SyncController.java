@@ -2,7 +2,9 @@ package com.reporthub.web;
 
 import com.reporthub.common.ApiResponse;
 import com.reporthub.service.QueryModeService;
+import com.reporthub.service.ReportResultCache;
 import com.reporthub.service.SyncService;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -14,25 +16,31 @@ public class SyncController {
     private final SyncService syncService;
     private final QueryModeService modeService;
     private final com.reporthub.service.DashboardService dashboardService;
+    private final ReportResultCache resultCache;
 
     public SyncController(SyncService syncService, QueryModeService modeService,
-                          com.reporthub.service.DashboardService dashboardService) {
+                          com.reporthub.service.DashboardService dashboardService,
+                          ReportResultCache resultCache) {
         this.syncService = syncService;
         this.modeService = modeService;
         this.dashboardService = dashboardService;
+        this.resultCache = resultCache;
     }
 
     @GetMapping("/sync/status")
+    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<List<Map<String, Object>>> status() {
         return ApiResponse.ok(syncService.listStatus());
     }
 
     @GetMapping("/sync/jobs")
+    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<?> jobs() {
         return ApiResponse.ok(syncService.listJobs());
     }
 
     @PostMapping("/sync/{datasetCode}/schedule")
+    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<?> updateSchedule(@PathVariable String datasetCode, @RequestBody Map<String, Object> body) {
         String type = String.valueOf(body.getOrDefault("scheduleType", "manual"));
         String time = body.get("scheduleTime") == null ? null : String.valueOf(body.get("scheduleTime"));
@@ -42,12 +50,14 @@ public class SyncController {
     }
 
     @PostMapping("/sync/{datasetCode}/stop")
+    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<?> stop(@PathVariable String datasetCode) {
         syncService.requestCancel(datasetCode);
         return ApiResponse.ok(Map.of("cancelled", datasetCode));
     }
 
     @PostMapping("/sync/{datasetCode}/enabled")
+    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<?> setEnabled(@PathVariable String datasetCode, @RequestBody Map<String, Object> body) {
         boolean enabled = Boolean.parseBoolean(String.valueOf(body.getOrDefault("enabled", "true")));
         syncService.setEnabled(datasetCode, enabled);
@@ -55,12 +65,14 @@ public class SyncController {
     }
 
     @PostMapping("/sync/run-all")
+    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<?> runAll(@RequestBody(required = false) java.util.Map<String, Object> body) {
         String strategy = String.valueOf(body == null ? "incremental" : body.getOrDefault("strategy", "incremental"));
         return ApiResponse.ok(syncService.triggerAll(strategy));
     }
 
     @PostMapping("/sync/{datasetCode}/run")
+    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<?> run(@PathVariable String datasetCode,
                               @RequestBody(required = false) java.util.Map<String, Object> body) {
         String strategy = String.valueOf(body == null ? "incremental" : body.getOrDefault("strategy", "incremental"));
@@ -73,10 +85,12 @@ public class SyncController {
     }
 
     @PostMapping("/settings/query-mode")
+    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<Map<String, Object>> setMode(@RequestBody Map<String, Object> body) {
         String mode = String.valueOf(body.getOrDefault("queryMode", "local"));
         modeService.setMode(mode);
-        // 模式变了，首页看板缓存按旧模式算的必须作废
+        // 模式变了，首页看板与报表缓存一并作废
+        resultCache.invalidateAll();
         dashboardService.invalidate();
         return ApiResponse.ok(modeService.snapshot());
     }
