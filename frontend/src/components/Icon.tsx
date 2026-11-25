@@ -34,6 +34,10 @@ export type IconName =
   | 'alert'
   | 'chevronRight'
   | 'clock'
+  | 'sparkle'
+  | 'send'
+  | 'trash'
+  | 'copy'
 
 const paths: Record<IconName, ReactNode> = {
   home: (
@@ -191,6 +195,29 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <circle cx="8" cy="8" r="5.5" />
       <path d="M8 5v3.2l2.2 1.4" />
+    </>
+  ),
+  sparkle: (
+    <>
+      <path d="M8 2.2 9.4 6.2 13.5 7.6 9.4 9 8 13.2 6.6 9 2.5 7.6 6.6 6.2Z" />
+      <path d="M12.5 2.5v2M11.5 3.5h2" />
+    </>
+  ),
+  send: (
+    <>
+      <path d="M13.5 2.5 7.2 8.8" />
+      <path d="M13.5 2.5 9.4 13.5 7.2 8.8 2.5 6.6 13.5 2.5Z" />
+    </>
+  ),
+  trash: (
+    <>
+      <path d="M3 4.5h10M6 4.5V3h4v1.5M4.5 4.5l.6 8.2a1 1 0 0 0 1 .8h3.8a1 1 0 0 0 1-.8l.6-8.2" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.4" />
+      <path d="M3.5 10.5V4.2A1.2 1.2 0 0 1 4.7 3h6.3" />
     </>
   ),
 }

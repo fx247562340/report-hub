@@ -15,6 +15,7 @@ const NAV_GROUPS: { key: string; title: string; icon: IconName; adminOnly: boole
     adminOnly: false,
     items: [
       { to: '/', label: '经营看板', icon: 'home', adminOnly: false, group: '业务分析' },
+      { to: '/ai', label: '智能问数', icon: 'sparkle', adminOnly: true, group: '业务分析' },
       { to: '/reports', label: '报表中心', icon: 'report', adminOnly: false, group: '业务分析' },
     ],
   },
@@ -45,6 +46,7 @@ const NAV_GROUPS: { key: string; title: string; icon: IconName; adminOnly: boole
 
 const ROUTE_META: Record<string, { group?: string; title: string }> = {
   '/': { title: '经营看板' },
+  '/ai': { group: '业务分析', title: '智能问数' },
   '/reports': { group: '业务分析', title: '报表中心' },
   '/sync': { group: '数据集成', title: '数据同步' },
   '/sync-logs': { group: '数据集成', title: '同步记录' },
@@ -106,7 +108,10 @@ export default function Shell() {
   const initials = displayName.slice(0, 2).toUpperCase()
   const roleLabel = isAdmin ? '管理员' : '查询员'
 
-  const isReportDetail = /^\/reports\/[^/]+/.test(location.pathname) || location.pathname === '/relations'
+  const isReportDetail =
+    /^\/reports\/[^/]+/.test(location.pathname) ||
+    location.pathname === '/relations' ||
+    location.pathname === '/ai'
 
   useEffect(() => {
     api.get<any>('/api/settings/query-mode').then((d) => {
@@ -205,7 +210,11 @@ export default function Shell() {
   }
 
   const visibleGroups = useMemo(
-    () => NAV_GROUPS.filter((g) => isAdmin || !g.adminOnly),
+    () =>
+      NAV_GROUPS
+        .filter((g) => isAdmin || !g.adminOnly)
+        .map((g) => ({ ...g, items: g.items.filter((it) => isAdmin || !it.adminOnly) }))
+        .filter((g) => g.items.length > 0),
     [isAdmin]
   )
 

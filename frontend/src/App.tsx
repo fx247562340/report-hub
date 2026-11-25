@@ -15,6 +15,7 @@ import About from './pages/About'
 import Sync from './pages/Sync'
 import SyncConfigDetail from './pages/SyncConfigDetail'
 import SyncLogs from './pages/SyncLogs'
+import AiChat from './pages/AiChat'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const user = getUser()
@@ -43,6 +44,7 @@ export default function App() {
         }
       >
         <Route index element={<Home />} />
+        <Route path="ai" element={<RequireAdmin><AiChat /></RequireAdmin>} />
         <Route path="reports" element={<Reports />} />
         <Route path="reports/:code" element={<ReportRun />} />
         <Route path="sync" element={<RequireAdmin><Sync /></RequireAdmin>} />
