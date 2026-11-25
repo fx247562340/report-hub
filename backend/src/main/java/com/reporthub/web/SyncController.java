@@ -30,10 +30,27 @@ public class SyncController {
         return ApiResponse.ok(syncService.listStatus());
     }
 
+    @GetMapping("/sync/{datasetCode}/config")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ApiResponse<Map<String, Object>> getConfig(@PathVariable String datasetCode) {
+        return ApiResponse.ok(syncService.getStatus(datasetCode));
+    }
+
+    @PostMapping("/sync/{datasetCode}/config")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ApiResponse<Map<String, Object>> saveConfig(@PathVariable String datasetCode,
+                                                       @RequestBody Map<String, Object> body) {
+        return ApiResponse.ok(syncService.updateConfig(datasetCode, body));
+    }
+
     @GetMapping("/sync/jobs")
     @PreAuthorize("hasRole('ADMIN')")
-    public ApiResponse<?> jobs() {
-        return ApiResponse.ok(syncService.listJobs());
+    public ApiResponse<List<Map<String, Object>>> jobs(
+            @RequestParam(required = false) String datasetCode,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String trigger,
+            @RequestParam(defaultValue = "100") int limit) {
+        return ApiResponse.ok(syncService.listJobs(datasetCode, status, trigger, limit));
     }
 
     @PostMapping("/sync/{datasetCode}/schedule")

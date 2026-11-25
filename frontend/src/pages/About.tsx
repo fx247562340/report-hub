@@ -128,8 +128,8 @@ export default function About() {
             <h3>管理员运维指南</h3>
             <div className="sub">系统已自动化运行，以下入口仅在日常巡检或口径调整时使用</div>
             <div className="kv">
-              <div className="k"><Link to="/sync" style={{ color: 'var(--accent)' }}>数据同步</Link></div>
-              <div>13 个核心数据集已配置每日自动同步。若上游补录/修改了历史月份单据，可点单表「全量同步」重拉；同步异常时侧栏与看板顶部会亮红点提示。</div>
+              <div className="k"><Link to="/sync" style={{ color: 'var(--accent)' }}>数据同步与记录</Link></div>
+              <div>13 个核心数据集已配置每日自动同步，点击「配置」可调整定时计划与分页参数；历史同步流水、耗时与错误堆栈可在左侧「<Link to="/sync-logs" style={{ color: 'var(--accent)' }}>同步记录</Link>」独立查看和一键重跑。</div>
               <div className="k"><Link to="/reports/rpt_contract_scroll" style={{ color: 'var(--accent)' }}>期初基线维护</Link></div>
               <div>在《销售合同滚动统计报表》右上角点「期初基线」，可维护 2026-10 期初结存或补充纸质合同号与 U9 项目号/订单号映射，保存后自动生效。</div>
               <div className="k">查询模式切换</div>

@@ -13,6 +13,8 @@ import Users from './pages/Users'
 import Profile from './pages/Profile'
 import About from './pages/About'
 import Sync from './pages/Sync'
+import SyncConfigDetail from './pages/SyncConfigDetail'
+import SyncLogs from './pages/SyncLogs'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const user = getUser()
@@ -44,6 +46,8 @@ export default function App() {
         <Route path="reports" element={<Reports />} />
         <Route path="reports/:code" element={<ReportRun />} />
         <Route path="sync" element={<RequireAdmin><Sync /></RequireAdmin>} />
+        <Route path="sync/:datasetCode" element={<RequireAdmin><SyncConfigDetail /></RequireAdmin>} />
+        <Route path="sync-logs" element={<RequireAdmin><SyncLogs /></RequireAdmin>} />
         <Route path="datasources" element={<RequireAdmin><Datasources /></RequireAdmin>} />
         <Route path="endpoints" element={<RequireAdmin><Endpoints /></RequireAdmin>} />
         <Route path="datasets" element={<RequireAdmin><Datasets /></RequireAdmin>} />

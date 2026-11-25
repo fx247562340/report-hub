@@ -81,8 +81,64 @@ public class SyncService {
         cfg.setScheduleWeekday(scheduleWeekday);
         cfg.setScheduleIntervalMin(scheduleIntervalMin);
         cfg.setUpdatedAt(Instant.now());
-        cfg.setNextScheduleRun(computeNextRun(cfg));
+        cfg.setNextScheduleRun(Boolean.TRUE.equals(cfg.getEnabled()) ? computeNextRun(cfg) : null);
         return configRepo.save(cfg);
+    }
+
+    /** 统一保存单数据集的同步配置（启用状态、调度计划、分页参数、备注） */
+    public Map<String, Object> updateConfig(String datasetCode, Map<String, Object> body) {
+        SyncConfig cfg = configRepo.findById(datasetCode)
+                .orElseThrow(() -> new BizException("未配置同步: " + datasetCode));
+        if (body.containsKey("enabled") && body.get("enabled") != null) {
+            boolean enabled = Boolean.parseBoolean(String.valueOf(body.get("enabled")));
+            cfg.setEnabled(enabled);
+            if (!enabled) requestCancel(datasetCode);
+        }
+        if (body.containsKey("scheduleType") && body.get("scheduleType") != null) {
+            String scheduleType = String.valueOf(body.get("scheduleType"));
+            if (!java.util.Set.of("manual", "interval", "daily", "weekly").contains(scheduleType)) {
+                throw new BizException("schedule_type 必须是 manual|interval|daily|weekly");
+            }
+            cfg.setScheduleType(scheduleType);
+        }
+        if (body.containsKey("scheduleTime")) {
+            Object v = body.get("scheduleTime");
+            cfg.setScheduleTime(v == null || String.valueOf(v).isBlank() ? null : String.valueOf(v).trim());
+        }
+        if (body.containsKey("scheduleWeekday")) {
+            Object v = body.get("scheduleWeekday");
+            if (v != null && !String.valueOf(v).isBlank()) {
+                int wd = Integer.parseInt(String.valueOf(v));
+                if (wd < 1 || wd > 7) throw new BizException("星期必须在 1-7 之间");
+                cfg.setScheduleWeekday(wd);
+            }
+        }
+        if (body.containsKey("scheduleIntervalMin")) {
+            Object v = body.get("scheduleIntervalMin");
+            if (v != null && !String.valueOf(v).isBlank()) {
+                int min = Integer.parseInt(String.valueOf(v));
+                if (min < 5 || min > 10080) throw new BizException("同步间隔需在 5 - 10080 分钟之间");
+                cfg.setScheduleIntervalMin(min);
+            }
+        }
+        if (body.containsKey("pageSize") && body.get("pageSize") != null && !String.valueOf(body.get("pageSize")).isBlank()) {
+            int ps = Integer.parseInt(String.valueOf(body.get("pageSize")));
+            if (ps < 10 || ps > 5000) throw new BizException("每页条数需在 10 - 5000 之间");
+            cfg.setPageSize(ps);
+        }
+        if (body.containsKey("maxPages") && body.get("maxPages") != null && !String.valueOf(body.get("maxPages")).isBlank()) {
+            int mp = Integer.parseInt(String.valueOf(body.get("maxPages")));
+            if (mp < 1 || mp > 5000) throw new BizException("最大页数需在 1 - 5000 之间");
+            cfg.setMaxPages(mp);
+        }
+        if (body.containsKey("notes")) {
+            Object v = body.get("notes");
+            cfg.setNotes(v == null ? "" : String.valueOf(v));
+        }
+        cfg.setUpdatedAt(Instant.now());
+        cfg.setNextScheduleRun(Boolean.TRUE.equals(cfg.getEnabled()) ? computeNextRun(cfg) : null);
+        configRepo.save(cfg);
+        return buildStatusMap(cfg);
     }
 
     /** 下次应执行时间；manual 返回 null */
@@ -160,7 +216,7 @@ public class SyncService {
                         && !"related".equalsIgnoreCase(cfg.getMode())
                         && (cfg.getIncrementalFilter() == null || cfg.getIncrementalFilter().isBlank());
                 String strat = fullReplace ? "full" : "incremental";
-                trigger(cfg.getDatasetCode(), strat);
+                trigger(cfg.getDatasetCode(), strat, fullReplace ? "schedule-full" : "schedule");
                 fired++;
                 log.info("schedule fire dataset={} type={} strategy={}", cfg.getDatasetCode(), cfg.getScheduleType(), strat);
             } catch (Exception e) {
@@ -174,6 +230,7 @@ public class SyncService {
         SyncConfig cfg = configRepo.findById(datasetCode)
                 .orElseThrow(() -> new BizException("未配置同步: " + datasetCode));
         cfg.setEnabled(enabled);
+        cfg.setNextScheduleRun(enabled ? computeNextRun(cfg) : null);
         cfg.setUpdatedAt(Instant.now());
         configRepo.save(cfg);
         if (!enabled) requestCancel(datasetCode);
@@ -197,35 +254,111 @@ public class SyncService {
     }
 
     public List<Map<String, Object>> listStatus() {
+        List<SyncConfig> all = new java.util.ArrayList<>(configRepo.findAll());
+        all.sort((a, b) -> {
+            boolean ak = "keys".equalsIgnoreCase(a.getMode()) || "related".equalsIgnoreCase(a.getMode());
+            boolean bk = "keys".equalsIgnoreCase(b.getMode()) || "related".equalsIgnoreCase(b.getMode());
+            if (ak != bk) return ak ? 1 : -1;
+            return a.getDatasetCode().compareTo(b.getDatasetCode());
+        });
+        List<Map<String, Object>> out = new java.util.ArrayList<>(all.size());
+        for (SyncConfig c : all) {
+            out.add(buildStatusMap(c));
+        }
+        return out;
+    }
+
+    public Map<String, Object> getStatus(String datasetCode) {
+        SyncConfig c = configRepo.findById(datasetCode)
+                .orElseThrow(() -> new BizException("未配置同步: " + datasetCode));
+        return buildStatusMap(c);
+    }
+
+    private Map<String, Object> buildStatusMap(SyncConfig c) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("datasetCode", c.getDatasetCode());
+        DatasetDef ds = datasetRepo.findById(c.getDatasetCode()).orElse(null);
+        ApiEndpointDef ep = ds != null && ds.getEndpointCode() != null
+                ? endpointRepo.findById(ds.getEndpointCode()).orElse(null) : null;
+        DataSourceDef src = ep != null && ep.getDataSourceCode() != null
+                ? dataSourceRepo.findById(ep.getDataSourceCode()).orElse(null) : null;
+        m.put("name", ds != null ? ds.getName() : c.getDatasetCode());
+        m.put("endpointCode", ds != null ? ds.getEndpointCode() : null);
+        m.put("endpointMethod", ep != null ? ep.getMethod() : null);
+        m.put("endpointPath", ep != null ? ep.getPath() : null);
+        m.put("dataSourceCode", src != null ? src.getCode() : null);
+        m.put("dataSourceName", src != null ? src.getName() : null);
+        m.put("enabled", c.getEnabled());
+        m.put("scheduleType", c.getScheduleType());
+        m.put("scheduleTime", c.getScheduleTime());
+        m.put("scheduleWeekday", c.getScheduleWeekday());
+        m.put("scheduleIntervalMin", c.getScheduleIntervalMin());
+        m.put("lastScheduleRun", c.getLastScheduleRun());
+        m.put("nextScheduleRun", Boolean.TRUE.equals(c.getEnabled()) ? c.getNextScheduleRun() : null);
+        m.put("mode", c.getMode());
+        m.put("parentDataset", c.getParentDataset());
+        m.put("keyPath", c.getKeyPath());
+        m.put("keysSql", c.getKeysSql());
+        m.put("keysEndpoint", c.getKeysEndpoint());
+        m.put("incrementalFilter", c.getIncrementalFilter());
+        boolean hasInc = c.getIncrementalFilter() != null && !c.getIncrementalFilter().isBlank();
+        m.put("hasIncrementalFilter", hasInc);
+        boolean scheduledFull = !"keys".equalsIgnoreCase(c.getMode())
+                && !"related".equalsIgnoreCase(c.getMode())
+                && !hasInc;
+        m.put("scheduledStrategy", scheduledFull ? "full" : "incremental");
+        m.put("pageSize", c.getPageSize());
+        m.put("maxPages", c.getMaxPages());
+        m.put("notes", c.getNotes() == null ? "" : c.getNotes());
+        m.put("recordCount", recordRepo.countByDatasetCode(c.getDatasetCode()));
+        m.put("lastSyncedAt", recordRepo.findLastSyncedAt(c.getDatasetCode()));
+        jobRepo.findByDatasetCodeOrderByStartedAtDesc(c.getDatasetCode()).stream().findFirst().ifPresent(j -> {
+            m.put("lastJobStatus", j.getStatus());
+            m.put("lastJobRows", j.getRowCount());
+            m.put("lastJobError", j.getError());
+            m.put("lastJobDurationMs", j.getDurationMs());
+            m.put("lastJobTrigger", j.getTrigger());
+        });
+        return m;
+    }
+
+    public List<Map<String, Object>> listJobs(String datasetCode, String status, String triggerGroup, int limit) {
+        int cap = Math.max(1, Math.min(limit <= 0 ? 100 : limit, 200));
+        List<SyncJob> raw = (datasetCode != null && !datasetCode.isBlank())
+                ? jobRepo.findByDatasetCodeOrderByStartedAtDesc(datasetCode.trim())
+                : jobRepo.findTop200ByOrderByStartedAtDesc();
+        Map<String, String> nameCache = new java.util.HashMap<>();
+        for (DatasetDef d : datasetRepo.findAll()) {
+            nameCache.put(d.getCode(), d.getName());
+        }
         List<Map<String, Object>> out = new java.util.ArrayList<>();
-        for (SyncConfig c : configRepo.findAll()) {
+        for (SyncJob j : raw) {
+            if (status != null && !status.isBlank() && !"all".equalsIgnoreCase(status)) {
+                if ("active".equalsIgnoreCase(status)) {
+                    if (!"running".equals(j.getStatus()) && !"queued".equals(j.getStatus())) continue;
+                } else if (!status.equalsIgnoreCase(j.getStatus())) {
+                    continue;
+                }
+            }
+            if (triggerGroup != null && !triggerGroup.isBlank() && !"all".equalsIgnoreCase(triggerGroup)) {
+                String t = j.getTrigger() == null ? "" : j.getTrigger().toLowerCase();
+                if ("schedule".equalsIgnoreCase(triggerGroup) && !t.startsWith("schedule")) continue;
+                if ("manual".equalsIgnoreCase(triggerGroup) && t.startsWith("schedule")) continue;
+            }
             Map<String, Object> m = new java.util.LinkedHashMap<>();
-            m.put("datasetCode", c.getDatasetCode());
-            DatasetDef ds = datasetRepo.findById(c.getDatasetCode()).orElse(null);
-            m.put("name", ds != null ? ds.getName() : c.getDatasetCode());
-            m.put("endpointCode", ds != null ? ds.getEndpointCode() : null);
-            m.put("enabled", c.getEnabled());
-            m.put("scheduleType", c.getScheduleType());
-            m.put("scheduleTime", c.getScheduleTime());
-            m.put("scheduleWeekday", c.getScheduleWeekday());
-            m.put("scheduleIntervalMin", c.getScheduleIntervalMin());
-            m.put("lastScheduleRun", c.getLastScheduleRun());
-            m.put("nextScheduleRun", c.getNextScheduleRun());
-            m.put("mode", c.getMode());
-            m.put("parentDataset", c.getParentDataset());
-            m.put("keyPath", c.getKeyPath());
-            m.put("keysSql", c.getKeysSql());
-            m.put("pageSize", c.getPageSize());
-            m.put("maxPages", c.getMaxPages());
-            m.put("recordCount", recordRepo.countByDatasetCode(c.getDatasetCode()));
-            m.put("lastSyncedAt", recordRepo.findLastSyncedAt(c.getDatasetCode()));
-            jobRepo.findByDatasetCodeOrderByStartedAtDesc(c.getDatasetCode()).stream().findFirst().ifPresent(j -> {
-                m.put("lastJobStatus", j.getStatus());
-                m.put("lastJobRows", j.getRowCount());
-                m.put("lastJobError", j.getError());
-                m.put("lastJobDurationMs", j.getDurationMs());
-            });
+            m.put("id", j.getId());
+            m.put("datasetCode", j.getDatasetCode());
+            m.put("datasetName", nameCache.getOrDefault(j.getDatasetCode(), j.getDatasetCode()));
+            m.put("status", j.getStatus());
+            m.put("startedAt", j.getStartedAt());
+            m.put("finishedAt", j.getFinishedAt());
+            m.put("rowCount", j.getRowCount());
+            m.put("pageCount", j.getPageCount());
+            m.put("durationMs", j.getDurationMs());
+            m.put("error", j.getError());
+            m.put("trigger", j.getTrigger());
             out.add(m);
+            if (out.size() >= cap) break;
         }
         return out;
     }
@@ -275,6 +408,10 @@ public class SyncService {
 
     /** 异步触发一次同步；strategy = incremental（默认，只取新增并 upsert）| full（清库重写） */
     public SyncJob trigger(String datasetCode, String strategy) {
+        return trigger(datasetCode, strategy, "full".equalsIgnoreCase(strategy) ? "manual-full" : "manual");
+    }
+
+    public SyncJob trigger(String datasetCode, String strategy, String triggerLabel) {
         SyncConfig cfg = configRepo.findById(datasetCode)
                 .orElseThrow(() -> new BizException("未配置同步: " + datasetCode));
         if (!Boolean.TRUE.equals(cfg.getEnabled())) throw new BizException("同步已停用: " + datasetCode);
@@ -282,7 +419,9 @@ public class SyncService {
         SyncJob job = new SyncJob();
         job.setDatasetCode(datasetCode);
         job.setStatus("queued");
-        job.setTrigger("full".equalsIgnoreCase(strategy) ? "manual-full" : "manual");
+        job.setTrigger(triggerLabel != null && !triggerLabel.isBlank()
+                ? triggerLabel
+                : ("full".equalsIgnoreCase(strategy) ? "manual-full" : "manual"));
         job = jobRepo.save(job);
         final Long jobId = job.getId();
         final String strat = strategy;

@@ -33,6 +33,7 @@ export type IconName =
   | 'trend'
   | 'alert'
   | 'chevronRight'
+  | 'clock'
 
 const paths: Record<IconName, ReactNode> = {
   home: (
@@ -186,6 +187,12 @@ const paths: Record<IconName, ReactNode> = {
     </>
   ),
   chevronRight: <path d="M6.2 4 10.2 8l-4 4" />,
+  clock: (
+    <>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 5v3.2l2.2 1.4" />
+    </>
+  ),
 }
 
 export function Icon({

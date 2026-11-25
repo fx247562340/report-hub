@@ -6,5 +6,6 @@ import java.util.List;
 
 public interface SyncJobRepo extends JpaRepository<SyncJob, Long> {
     List<SyncJob> findTop50ByOrderByStartedAtDesc();
+    List<SyncJob> findTop200ByOrderByStartedAtDesc();
     List<SyncJob> findByDatasetCodeOrderByStartedAtDesc(String datasetCode);
 }

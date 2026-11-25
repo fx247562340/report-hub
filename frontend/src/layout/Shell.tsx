@@ -23,6 +23,7 @@ const NAV_GROUPS: { key: string; title: string; adminOnly: boolean; items: NavIt
     adminOnly: true,
     items: [
       { to: '/sync', label: '数据同步', icon: 'sync', adminOnly: true, group: '数据集成' },
+      { to: '/sync-logs', label: '同步记录', icon: 'clock', adminOnly: true, group: '数据集成' },
       { to: '/datasources', label: '数据源', icon: 'datasource', adminOnly: true, group: '数据集成' },
       { to: '/endpoints', label: '接口管理', icon: 'api', adminOnly: true, group: '数据集成' },
       { to: '/datasets', label: '数据集', icon: 'dataset', adminOnly: true, group: '数据集成' },
@@ -43,6 +44,7 @@ const ROUTE_META: Record<string, { group?: string; title: string }> = {
   '/': { title: '经营看板' },
   '/reports': { group: '业务分析', title: '报表中心' },
   '/sync': { group: '数据集成', title: '数据同步' },
+  '/sync-logs': { group: '数据集成', title: '同步记录' },
   '/datasources': { group: '数据集成', title: '数据源' },
   '/endpoints': { group: '数据集成', title: '接口管理' },
   '/datasets': { group: '数据集成', title: '数据集' },
@@ -212,6 +214,13 @@ export default function Shell() {
       return {
         parent: { label: '报表中心', to: '/reports' },
         current: found?.name || code,
+      }
+    }
+    if (p.startsWith('/sync/')) {
+      const code = decodeURIComponent(p.slice('/sync/'.length))
+      return {
+        parent: { label: '数据同步', to: '/sync' },
+        current: `${code} · 同步配置`,
       }
     }
     const meta = ROUTE_META[p]
