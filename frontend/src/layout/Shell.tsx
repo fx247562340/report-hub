@@ -101,7 +101,7 @@ export default function Shell() {
   const initials = displayName.slice(0, 2).toUpperCase()
   const roleLabel = isAdmin ? '管理员' : '查询员'
 
-  const isReportDetail = /^\/reports\/[^/]+/.test(location.pathname)
+  const isReportDetail = /^\/reports\/[^/]+/.test(location.pathname) || location.pathname === '/relations'
 
   useEffect(() => {
     api.get<any>('/api/settings/query-mode').then((d) => {
