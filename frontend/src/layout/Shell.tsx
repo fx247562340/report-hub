@@ -7,10 +7,11 @@ import Logo from '../components/Logo'
 type NavItem = { to: string; label: string; icon: IconName; adminOnly: boolean; group: string }
 type ReportLite = { code: string; name: string; description?: string }
 
-const NAV_GROUPS: { key: string; title: string; adminOnly: boolean; items: NavItem[] }[] = [
+const NAV_GROUPS: { key: string; title: string; icon: IconName; adminOnly: boolean; items: NavItem[] }[] = [
   {
     key: 'analysis',
     title: '业务分析',
+    icon: 'trend',
     adminOnly: false,
     items: [
       { to: '/', label: '经营看板', icon: 'home', adminOnly: false, group: '业务分析' },
@@ -20,6 +21,7 @@ const NAV_GROUPS: { key: string; title: string; adminOnly: boolean; items: NavIt
   {
     key: 'integration',
     title: '数据集成',
+    icon: 'database',
     adminOnly: true,
     items: [
       { to: '/sync', label: '数据同步', icon: 'sync', adminOnly: true, group: '数据集成' },
@@ -33,6 +35,7 @@ const NAV_GROUPS: { key: string; title: string; adminOnly: boolean; items: NavIt
   {
     key: 'system',
     title: '系统管理',
+    icon: 'config',
     adminOnly: true,
     items: [
       { to: '/users', label: '用户管理', icon: 'users', adminOnly: true, group: '系统管理' },
@@ -284,7 +287,7 @@ export default function Shell() {
       <aside className={`sidebar${drawerOpen ? ' open' : ''}`}>
         <div className="brand">
           <Logo
-            size={30}
+            size={34}
             title={collapsed ? '' : 'REPORT HUB'}
             subtitle={collapsed ? '' : '智能经营报表'}
           />
@@ -293,60 +296,71 @@ export default function Shell() {
         <nav className="nav" aria-label="主导航">
           {visibleGroups.map((group) => {
             const expanded = collapsed ? true : groupOpen[group.key] !== false
+            const p = location.pathname
+            const hasActive = group.items.some((it) =>
+              it.to === '/' ? p === '/' : p === it.to || p.startsWith(it.to + '/')
+            )
             return (
-              <div className="nav-group" key={group.key}>
+              <div className={`nav-group${expanded ? ' expanded' : ''}${hasActive ? ' has-active' : ''}`} key={group.key}>
                 {!collapsed && (
                   <button
                     type="button"
-                    className="nav-group-title clickable"
+                    className={`nav-group-title clickable${hasActive ? ' active' : ''}`}
                     aria-expanded={expanded}
                     onClick={() => toggleGroup(group.key)}
                   >
                     <span className="nav-group-title-left">
-                      <span>{group.title}</span>
+                      <span className="nav-group-ico">
+                        <Icon name={group.icon} size={14} />
+                      </span>
+                      <span className="nav-group-label">{group.title}</span>
                       {group.key === 'integration' && !expanded && syncFailed > 0 && (
                         <span className="nav-badge err" title={`${syncFailed} 项同步异常`}>
                           {syncFailed}
                         </span>
                       )}
                     </span>
-                    <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
+                    <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={13} className="nav-group-caret" />
                   </button>
                 )}
 
-                {expanded && group.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.to === '/'}
-                    title={collapsed ? item.label : undefined}
-                    className={({ isActive }) => (isActive ? 'active' : '')}
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    <span className="ico"><Icon name={item.icon} size={17} /></span>
-                    {!collapsed && <span className="nav-label">{item.label}</span>}
-                    {item.to === '/sync' && syncFailed > 0 && (
-                      <span className="nav-badge err" title={`${syncFailed} 项同步异常`}>
-                        {syncFailed}
-                      </span>
-                    )}
-                  </NavLink>
-                ))}
-
-                {/* 业务分析组下方：常用报表一键直达 */}
-                {expanded && group.key === 'analysis' && !collapsed && reports.length > 0 && (
-                  <div className="nav-sublist">
-                    {reports.slice(0, 5).map((r) => (
+                {expanded && (
+                  <div className="nav-group-items">
+                    {group.items.map((item) => (
                       <NavLink
-                        key={r.code}
-                        to={`/reports/${r.code}`}
-                        className={({ isActive }) => `nav-sub-item${isActive ? ' active' : ''}`}
-                        title={r.name}
+                        key={item.to}
+                        to={item.to}
+                        end={item.to === '/'}
+                        title={collapsed ? item.label : undefined}
+                        className={({ isActive }) => `nav-l2-item${isActive ? ' active' : ''}`}
+                        onClick={() => setMenuOpen(false)}
                       >
-                        <span className="nav-sub-dot" />
-                        <span className="nav-label">{r.name}</span>
+                        <span className="ico"><Icon name={item.icon} size={15} /></span>
+                        {!collapsed && <span className="nav-label">{item.label}</span>}
+                        {item.to === '/sync' && syncFailed > 0 && (
+                          <span className="nav-badge err" title={`${syncFailed} 项同步异常`}>
+                            {syncFailed}
+                          </span>
+                        )}
                       </NavLink>
                     ))}
+
+                    {/* 业务分析组下方：常用报表三级快捷入口 */}
+                    {group.key === 'analysis' && !collapsed && reports.length > 0 && (
+                      <div className="nav-sublist">
+                        {reports.slice(0, 5).map((r) => (
+                          <NavLink
+                            key={r.code}
+                            to={`/reports/${r.code}`}
+                            className={({ isActive }) => `nav-sub-item${isActive ? ' active' : ''}`}
+                            title={r.name}
+                          >
+                            <span className="nav-sub-dot" />
+                            <span className="nav-label">{r.name}</span>
+                          </NavLink>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

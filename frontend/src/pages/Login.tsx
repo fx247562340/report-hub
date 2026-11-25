@@ -41,20 +41,24 @@ export default function Login() {
         <div className="login-bg-overlay" />
         <div className="login-visual-copy">
           <div className="login-visual-kicker">REPORT HUB</div>
-          <h2>跨系统报表，配置即用</h2>
-          <p>连接 ERP / MES 接口，映射字段、关联多源，实时汇总一张表</p>
+          <h2>智能经营报表，开箱即用</h2>
+          <p>直连 U9 ERP 与瑞马 MES，自动同步落库、月度滚动核算与全量导出</p>
         </div>
       </div>
 
       <main className="login-panel">
         <form className="login-card" onSubmit={onSubmit}>
           <div className="login-logo" aria-hidden>
-            <LogoMark size={52} />
+            <LogoMark size={62} />
           </div>
-          <div className="login-brand-name">REPORT HUB</div>
+          <div className="login-brand-name">
+            <span>REPORT</span>
+            <span className="logo-title-accent">HUB</span>
+          </div>
+          <div className="login-brand-tag">智能经营报表平台</div>
 
           <h1>欢迎回来</h1>
-          <p className="login-sub">登录 REPORT HUB，继续配置与查询</p>
+          <p className="login-sub">登录系统查看经营看板与核心业务报表</p>
 
           {error && <div className="error-banner">{error}</div>}
 
