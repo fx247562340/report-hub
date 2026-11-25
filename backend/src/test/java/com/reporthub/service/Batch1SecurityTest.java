@@ -92,12 +92,9 @@ class Batch1SecurityTest {
     }
 
     @Test
-    void registerIsBlockedByDefault() {
-        ReportHubProperties props = new ReportHubProperties();
-        assertFalse(props.getSecurity().isAllowRegister());
-        AuthService auth = new AuthService(null, null, null, props);
-        BizException ex = assertThrows(BizException.class,
-                () -> auth.register("intruder", "123456", "Intruder"));
-        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    void authControllerDoesNotExposePublicRegisterEndpoint() {
+        boolean hasRegister = java.util.Arrays.stream(com.reporthub.web.AuthController.class.getDeclaredMethods())
+                .anyMatch(m -> "register".equals(m.getName()));
+        assertFalse(hasRegister, "Public self-registration endpoint must remain removed");
     }
 }

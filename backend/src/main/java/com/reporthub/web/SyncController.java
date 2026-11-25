@@ -15,15 +15,12 @@ import java.util.Map;
 public class SyncController {
     private final SyncService syncService;
     private final QueryModeService modeService;
-    private final com.reporthub.service.DashboardService dashboardService;
     private final ReportResultCache resultCache;
 
     public SyncController(SyncService syncService, QueryModeService modeService,
-                          com.reporthub.service.DashboardService dashboardService,
                           ReportResultCache resultCache) {
         this.syncService = syncService;
         this.modeService = modeService;
-        this.dashboardService = dashboardService;
         this.resultCache = resultCache;
     }
 
@@ -89,9 +86,8 @@ public class SyncController {
     public ApiResponse<Map<String, Object>> setMode(@RequestBody Map<String, Object> body) {
         String mode = String.valueOf(body.getOrDefault("queryMode", "local"));
         modeService.setMode(mode);
-        // 模式变了，首页看板与报表缓存一并作废
+        // 模式变了，报表与经营看板缓存一并作废
         resultCache.invalidateAll();
-        dashboardService.invalidate();
         return ApiResponse.ok(modeService.snapshot());
     }
 }

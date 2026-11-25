@@ -22,11 +22,6 @@ public class AuthController {
         return ApiResponse.ok(authService.login(body.get("username"), body.get("password")));
     }
 
-    @PostMapping("/register")
-    public ApiResponse<Map<String, Object>> register(@RequestBody Map<String, String> body) {
-        return ApiResponse.ok(authService.register(body.get("username"), body.get("password"), body.get("displayName")));
-    }
-
     @GetMapping("/me")
     public ApiResponse<Map<String, Object>> me(Authentication auth) {
         return ApiResponse.ok(authService.me(auth.getName()));

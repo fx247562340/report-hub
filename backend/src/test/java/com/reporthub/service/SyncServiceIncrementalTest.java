@@ -14,7 +14,7 @@ class SyncServiceIncrementalTest {
     @Test
     void crossMonthFiltersAppendMonthsSplitsIntoSeparateRequests() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
-        SyncService svc = new SyncService(null, null, null, null, null, null, null, mapper, null, null, null);
+        SyncService svc = new SyncService(null, null, null, null, null, null, null, mapper, null, null);
 
         ApiEndpointDef ep = new ApiEndpointDef();
         ep.setCode("u9c_ship_l");

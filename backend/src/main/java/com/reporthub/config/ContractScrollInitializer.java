@@ -60,12 +60,28 @@ public class ContractScrollInitializer implements CommandLineRunner {
     public void run(String... args) {
         try {
             dropUnusedPayloadGinIndex();
+            cleanupObsoleteMetadata();
             ensureDatasourceIfEmpty();
             ensureEndpointsAndDatasets();
             ensureReportDef();
             ensureBaselinesSeeded();
         } catch (Exception e) {
             log.warn("ContractScrollInitializer warning: {}", e.getMessage(), e);
+        }
+    }
+
+    /** 清理已废弃的历史对象：dashboard_widgets 旧看板表、已下架的 ds_u9c_so / u9c_mo_so_contract */
+    private void cleanupObsoleteMetadata() {
+        try {
+            jdbc.execute("DROP TABLE IF EXISTS dashboard_widgets");
+            jdbc.update("DELETE FROM sync_jobs WHERE dataset_code = 'ds_u9c_so'");
+            jdbc.update("DELETE FROM sync_records WHERE dataset_code = 'ds_u9c_so'");
+            jdbc.update("DELETE FROM sync_configs WHERE dataset_code = 'ds_u9c_so'");
+            jdbc.update("DELETE FROM field_mappings WHERE dataset_code = 'ds_u9c_so'");
+            jdbc.update("DELETE FROM datasets WHERE code = 'ds_u9c_so'");
+            jdbc.update("DELETE FROM api_endpoints WHERE code = 'u9c_mo_so_contract'");
+        } catch (Exception e) {
+            log.debug("cleanupObsoleteMetadata skipped: {}", e.getMessage());
         }
     }
 

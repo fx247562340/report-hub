@@ -1,7 +1,6 @@
 package com.reporthub.service;
 
 import com.reporthub.common.BizException;
-import com.reporthub.config.ReportHubProperties;
 import com.reporthub.domain.UserAccount;
 import com.reporthub.repo.UserAccountRepo;
 import com.reporthub.security.JwtService;
@@ -9,24 +8,19 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
-import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.UUID;
 
 @Service
 public class AuthService {
     private final UserAccountRepo userRepo;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
-    private final ReportHubProperties props;
 
-    public AuthService(UserAccountRepo userRepo, PasswordEncoder passwordEncoder,
-                       JwtService jwtService, ReportHubProperties props) {
+    public AuthService(UserAccountRepo userRepo, PasswordEncoder passwordEncoder, JwtService jwtService) {
         this.userRepo = userRepo;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
-        this.props = props;
     }
 
     public Map<String, Object> login(String username, String password) {
@@ -36,27 +30,6 @@ public class AuthService {
         }
         String token = jwtService.issue(user.getId(), user.getUsername(), user.getRole());
         return profile(user, token);
-    }
-
-    public Map<String, Object> register(String username, String password, String displayName) {
-        if (!props.getSecurity().isAllowRegister()) {
-            throw new BizException("系统已关闭自助注册，请联系管理员创建账号", HttpStatus.FORBIDDEN);
-        }
-        if (userRepo.findByUsername(username) != null) {
-            throw new BizException("用户名已存在");
-        }
-        if (password == null || password.length() < 6) {
-            throw new BizException("密码至少 6 位");
-        }
-        UserAccount user = new UserAccount();
-        user.setId(UUID.randomUUID().toString());
-        user.setUsername(username);
-        user.setPasswordHash(passwordEncoder.encode(password));
-        user.setRole("member");
-        user.setDisplayName(displayName == null ? username : displayName);
-        user.setCreatedAt(Instant.now());
-        userRepo.save(user);
-        return profile(user, jwtService.issue(user.getId(), user.getUsername(), user.getRole()));
     }
 
     public Map<String, Object> me(String userId) {

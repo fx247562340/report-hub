@@ -41,7 +41,6 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-reporthub}
       DB_DRIVER: org.postgresql.Driver
       JWT_SECRET: ${JWT_SECRET:-report-hub-compose-secret-change-me-32bytes!}
-      ALLOW_REGISTER: ${ALLOW_REGISTER:-false}
       SEED_DEMO: "true"
       JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx2048m}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}

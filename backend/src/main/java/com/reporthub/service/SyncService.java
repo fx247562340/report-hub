@@ -42,7 +42,6 @@ public class SyncService {
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
     private final ReportResultCache resultCache;
-    private final DashboardService dashboardService;
     private final ExecutorService pool = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "sync-runner");
         t.setDaemon(true);
@@ -182,7 +181,7 @@ public class SyncService {
     public SyncService(SyncConfigRepo configRepo, SyncJobRepo jobRepo, SyncRecordRepo recordRepo,
                        DatasetRepo datasetRepo, ApiEndpointRepo endpointRepo, DataSourceRepo dataSourceRepo,
                        UpstreamClient upstream, ObjectMapper mapper, TransactionTemplate tx,
-                       ReportResultCache resultCache, DashboardService dashboardService) {
+                       ReportResultCache resultCache) {
         this.configRepo = configRepo;
         this.jobRepo = jobRepo;
         this.recordRepo = recordRepo;
@@ -193,7 +192,6 @@ public class SyncService {
         this.mapper = mapper;
         this.tx = tx;
         this.resultCache = resultCache;
-        this.dashboardService = dashboardService;
     }
 
     public List<Map<String, Object>> listStatus() {
@@ -390,9 +388,8 @@ public class SyncService {
             job.setDurationMs((int) (System.currentTimeMillis() - t0));
             job.setFinishedAt(Instant.now());
             jobRepo.save(job);
-            // 同步完成后主动失效报表与首页看板缓存，确保立刻读到最新数据
+            // 同步完成后主动失效报表与经营看板缓存，确保立刻读到最新数据
             resultCache.invalidateAll();
-            dashboardService.invalidate();
             log.info("sync ok dataset={} rows={} pages={} ms={}", cfg.getDatasetCode(), rows, pages, job.getDurationMs());
         } catch (Exception e) {
             boolean cancelled = isCancelRequested(cfg.getDatasetCode())
@@ -522,10 +519,12 @@ public class SyncService {
         return rows.get();
     }
 
-    /** 键源一：上游 SQL 枚举（QueryInfoBySql，U9 已下架，保留给其他源） */
+    /** 键源一：上游 SQL 枚举（通用 SQL 键源） */
     private LinkedHashSet<String> fetchKeysBySql(SyncConfig cfg, String keysSql) throws Exception {
-        String keysEp = cfg.getKeysEndpoint() == null || cfg.getKeysEndpoint().isBlank()
-                ? "u9c_mo_so_contract" : cfg.getKeysEndpoint();
+        String keysEp = cfg.getKeysEndpoint();
+        if (keysEp == null || keysEp.isBlank()) {
+            throw new BizException("keys_sql 模式需要配置 keys_endpoint");
+        }
         ApiEndpointDef sqlEp = endpointRepo.findById(keysEp)
                 .orElseThrow(() -> new BizException("keys 接口不存在: " + keysEp));
         DataSourceDef sqlSrc = dataSourceRepo.findById(sqlEp.getDataSourceCode()).orElseThrow();

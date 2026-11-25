@@ -31,8 +31,6 @@ reporthub:
   security:
     # API 经 Nginx 同源反代；默认放行任意来源，可用 CORS_ORIGINS 收紧
     cors-allowed-origins: ${CORS_ORIGINS:*}
-    # 默认关闭自助注册，账号由管理员在「用户管理」创建
-    allow-register: ${ALLOW_REGISTER:false}
   engine:
     lookup-concurrency: 8
     max-keys-per-batch: 200
@@ -40,8 +38,6 @@ reporthub:
     # 完整结果缓存：查询后预热，导出直接读缓存（秒开）
     result-cache-ttl-seconds: 600
     warm-on-query: true
-    # 首页看板缓存，避免每次打开都全量聚合
-    dashboard-ttl-seconds: 90
   seed: ${SEED_DEMO:true}
 
 logging:

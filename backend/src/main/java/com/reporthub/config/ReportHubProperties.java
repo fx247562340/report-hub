@@ -29,11 +29,8 @@ public class ReportHubProperties {
 
     public static class Security {
         private String corsAllowedOrigins = "http://localhost:5173";
-        private boolean allowRegister = false;
         public String getCorsAllowedOrigins() { return corsAllowedOrigins; }
         public void setCorsAllowedOrigins(String corsAllowedOrigins) { this.corsAllowedOrigins = corsAllowedOrigins; }
-        public boolean isAllowRegister() { return allowRegister; }
-        public void setAllowRegister(boolean allowRegister) { this.allowRegister = allowRegister; }
     }
 
     public static class Engine {
@@ -44,8 +41,6 @@ public class ReportHubProperties {
         private int resultCacheTtlSeconds = 600;
         /** 查询后后台预热全量缓存，便于紧接着导出秒开 */
         private boolean warmOnQuery = true;
-        /** 首页看板聚合结果缓存秒数 */
-        private int dashboardTtlSeconds = 90;
         public int getLookupConcurrency() { return lookupConcurrency; }
         public void setLookupConcurrency(int lookupConcurrency) { this.lookupConcurrency = lookupConcurrency; }
         public int getMaxKeysPerBatch() { return maxKeysPerBatch; }
@@ -56,7 +51,5 @@ public class ReportHubProperties {
         public void setResultCacheTtlSeconds(int resultCacheTtlSeconds) { this.resultCacheTtlSeconds = resultCacheTtlSeconds; }
         public boolean isWarmOnQuery() { return warmOnQuery; }
         public void setWarmOnQuery(boolean warmOnQuery) { this.warmOnQuery = warmOnQuery; }
-        public int getDashboardTtlSeconds() { return dashboardTtlSeconds; }
-        public void setDashboardTtlSeconds(int dashboardTtlSeconds) { this.dashboardTtlSeconds = dashboardTtlSeconds; }
     }
 }

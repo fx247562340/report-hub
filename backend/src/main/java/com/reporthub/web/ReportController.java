@@ -5,9 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reporthub.common.ApiResponse;
 import com.reporthub.domain.ReportDef;
 import com.reporthub.engine.ReportQueryEngine;
-import com.reporthub.repo.DatasetRepo;
-import com.reporthub.repo.FieldMappingRepo;
-import com.reporthub.repo.SyncRecordRepo;
 import com.reporthub.service.ConfigService;
 import com.reporthub.service.QueryModeService;
 import com.reporthub.service.ReportResultCache;
@@ -25,7 +22,6 @@ public class ReportController {
     private final ReportResultCache resultCache;
     private final QueryModeService queryModeService;
     private final ObjectMapper mapper;
-    private final SyncRecordRepo syncRecordRepo;
     private final com.reporthub.service.FilterOptionService filterOptionService;
     private final com.reporthub.service.ContractScrollService contractScrollService;
 
@@ -34,7 +30,6 @@ public class ReportController {
                             ReportResultCache resultCache,
                             QueryModeService queryModeService,
                             ObjectMapper mapper,
-                            SyncRecordRepo syncRecordRepo,
                             com.reporthub.service.FilterOptionService filterOptionService,
                             com.reporthub.service.ContractScrollService contractScrollService) {
         this.configService = configService;
@@ -42,7 +37,6 @@ public class ReportController {
         this.resultCache = resultCache;
         this.queryModeService = queryModeService;
         this.mapper = mapper;
-        this.syncRecordRepo = syncRecordRepo;
         this.filterOptionService = filterOptionService;
         this.contractScrollService = contractScrollService;
     }
@@ -97,18 +91,6 @@ public class ReportController {
             @PathVariable String code,
             @RequestBody(required = false) Map<String, Object> body) {
         return query(code, body);
-    }
-
-    /** 弹窗明细：按主表一行拉取各关联子列表 */
-    @PostMapping("/{code}/children")
-    public ApiResponse<Map<String, Object>> children(
-            @PathVariable String code,
-            @RequestBody(required = false) Map<String, Object> body) {
-        var report = configService.getReport(code);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> row = body == null ? Map.of() :
-                (Map<String, Object>) body.getOrDefault("row", Map.of());
-        return ApiResponse.ok(engine.children(report, row));
     }
 
     /** Export all filtered rows as xlsx (not just current page). */

@@ -42,7 +42,7 @@ function isAuthExpired(status: number, path: string) {
   if (status !== 401) return false
   const pathname = path.startsWith('http') ? new URL(path).pathname : path.split('?')[0]
   // 登录接口本身的 401 是密码错误，不是会话过期
-  return !pathname.startsWith('/api/auth/login') && !pathname.startsWith('/api/auth/register')
+  return !pathname.startsWith('/api/auth/login')
 }
 
 function redirectToLogin() {
