@@ -40,6 +40,7 @@ const NAV_GROUPS: { key: string; title: string; icon: IconName; adminOnly: boole
     adminOnly: true,
     items: [
       { to: '/users', label: '用户管理', icon: 'users', adminOnly: true, group: '系统管理' },
+      { to: '/ai-settings', label: '模型配置', icon: 'sparkle', adminOnly: true, group: '系统管理' },
     ],
   },
 ]
@@ -55,6 +56,7 @@ const ROUTE_META: Record<string, { group?: string; title: string }> = {
   '/datasets': { group: '数据集成', title: '数据集' },
   '/relations': { group: '数据集成', title: '关联关系' },
   '/users': { group: '系统管理', title: '用户管理' },
+  '/ai-settings': { group: '系统管理', title: '模型配置' },
   '/profile': { title: '个人中心' },
   '/about': { title: '使用说明' },
 }

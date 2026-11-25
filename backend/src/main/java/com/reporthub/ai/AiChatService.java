@@ -104,7 +104,7 @@ public class AiChatService {
         }
         AiConfigService.AiConfig cfg = configService.current();
         if (!cfg.isReady()) {
-            throw new BizException("尚未配置可用的 AI 模型，请先点击右上角「模型配置」完成设置");
+            throw new BizException("尚未配置可用的 AI 模型，请先前往「系统管理 → 模型配置」完成设置");
         }
 
         // 确保会话归属；未传 sessionId 时自动新建会话并以问题前 24 字命名

@@ -16,6 +16,7 @@ import Sync from './pages/Sync'
 import SyncConfigDetail from './pages/SyncConfigDetail'
 import SyncLogs from './pages/SyncLogs'
 import AiChat from './pages/AiChat'
+import AiSettings from './pages/AiSettings'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const user = getUser()
@@ -55,6 +56,7 @@ export default function App() {
         <Route path="datasets" element={<RequireAdmin><Datasets /></RequireAdmin>} />
         <Route path="relations" element={<RequireAdmin><Relations /></RequireAdmin>} />
         <Route path="users" element={<RequireAdmin><Users /></RequireAdmin>} />
+        <Route path="ai-settings" element={<RequireAdmin><AiSettings /></RequireAdmin>} />
         <Route path="profile" element={<Profile />} />
         <Route path="about" element={<About />} />
       </Route>

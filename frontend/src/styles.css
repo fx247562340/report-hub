@@ -3912,6 +3912,7 @@ tbody tr:hover { background: rgba(255,255,255,.02); }
   color: var(--text-2);
   font-size: 12px;
   font-family: var(--mono);
+  text-decoration: none;
   cursor: pointer;
   transition: border-color .15s ease;
 }

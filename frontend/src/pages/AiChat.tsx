@@ -1,21 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
-import { api, ensureAuthorized, getToken } from '../api/client'
+import { api, ensureAuthorized, getToken, getUser } from '../api/client'
 import Icon from '../components/Icon'
 import MarkdownView from '../components/MarkdownView'
 import { LogoMark } from '../components/Logo'
 
-type AiConfigView = {
+type AiConfigStatus = {
   enabled: boolean
   ready: boolean
-  baseUrl: string
-  apiKey: string
-  hasApiKey: boolean
   model: string
-  temperature: number
-  maxToolRounds: number
-  timeoutSeconds: number
 }
 
 type AiSession = {
@@ -58,13 +51,6 @@ const QUICK_PROMPTS = [
   { tag: '运维巡检', text: '检查目前 13 张本地同步表的同步状态，有没有同步失败的表？' },
 ]
 
-const PROVIDER_PRESETS = [
-  { name: '智谱 BigModel', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus' },
-  { name: '阿里云百炼', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
-  { name: 'OpenAI 兼容', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
-]
-
 function fmtSessionTime(iso?: string) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -74,7 +60,9 @@ function fmtSessionTime(iso?: string) {
 }
 
 export default function AiChat() {
-  const [config, setConfig] = useState<AiConfigView | null>(null)
+  const isAdmin = getUser()?.role === 'admin'
+
+  const [config, setConfig] = useState<AiConfigStatus | null>(null)
   const [sessions, setSessions] = useState<AiSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string>('')
   const [messages, setMessages] = useState<ChatMsg[]>([])
@@ -86,14 +74,6 @@ export default function AiChat() {
   const [copiedId, setCopiedId] = useState<string | number | null>(null)
   const [pageError, setPageError] = useState('')
 
-  // 模型配置弹窗状态
-  const [cfgOpen, setCfgOpen] = useState(false)
-  const [cfgDraft, setCfgDraft] = useState<AiConfigView | null>(null)
-  const [cfgSaving, setCfgSaving] = useState(false)
-  const [cfgTesting, setCfgTesting] = useState(false)
-  const [cfgMsg, setCfgMsg] = useState('')
-  const [cfgErr, setCfgErr] = useState('')
-
   const abortRef = useRef<AbortController | null>(null)
   const endRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -101,7 +81,7 @@ export default function AiChat() {
   async function initLoad() {
     try {
       const [c, list] = await Promise.all([
-        api.get<AiConfigView>('/api/ai/config'),
+        api.get<AiConfigStatus>('/api/ai/config'),
         api.get<AiSession[]>('/api/ai/sessions'),
       ])
       setConfig(c)
@@ -174,7 +154,7 @@ export default function AiChat() {
     const q = (qText ?? input).trim()
     if (!q || streaming) return
     if (!config?.ready) {
-      openConfigModal()
+      setPageError('尚未配置可用的 AI 模型，请先前往左侧「系统管理 → 模型配置」完成接入设置。')
       return
     }
 
@@ -341,59 +321,6 @@ export default function AiChat() {
     }
   }
 
-  function openConfigModal() {
-    setCfgErr('')
-    setCfgMsg('')
-    setCfgDraft(
-      config
-        ? { ...config }
-        : {
-            enabled: true,
-            ready: false,
-            baseUrl: '',
-            apiKey: '',
-            hasApiKey: false,
-            model: '',
-            temperature: 0.2,
-            maxToolRounds: 4,
-            timeoutSeconds: 60,
-          }
-    )
-    setCfgOpen(true)
-  }
-
-  async function saveConfig() {
-    if (!cfgDraft) return
-    setCfgSaving(true)
-    setCfgErr('')
-    setCfgMsg('')
-    try {
-      const saved = await api.post<AiConfigView>('/api/ai/config', cfgDraft)
-      setConfig(saved)
-      setCfgDraft({ ...saved })
-      setCfgMsg('模型配置已保存并立即生效')
-    } catch (e: any) {
-      setCfgErr(e?.message || '保存失败')
-    } finally {
-      setCfgSaving(false)
-    }
-  }
-
-  async function testConfig() {
-    if (!cfgDraft) return
-    setCfgTesting(true)
-    setCfgErr('')
-    setCfgMsg('')
-    try {
-      const res = await api.post<any>('/api/ai/config/test', cfgDraft)
-      setCfgMsg(`连接成功 · 模型 ${res.model} · 延迟 ${res.latencyMs} ms`)
-    } catch (e: any) {
-      setCfgErr(e?.message || '连接测试失败')
-    } finally {
-      setCfgTesting(false)
-    }
-  }
-
   async function copyContent(id: string | number, text: string) {
     try {
       await navigator.clipboard.writeText(text)
@@ -467,7 +394,7 @@ export default function AiChat() {
         </div>
       </aside>
 
-      {/* 右侧：主对话区 */}
+      {/* 右侧：纯净问数主对话区 */}
       <section className="ai-main">
         <header className="ai-main-head">
           <div className="ai-main-head-left">
@@ -478,18 +405,21 @@ export default function AiChat() {
             </div>
           </div>
           <div className="row" style={{ gap: 8 }}>
-            <button
-              type="button"
-              className={`ai-model-chip${config?.ready ? ' ready' : ' unconfigured'}`}
-              onClick={openConfigModal}
-              title="点击配置 OpenAI 兼容模型"
-            >
-              <span className={`ai-model-dot${config?.ready ? ' ok' : ''}`} />
-              <span>{config?.ready ? config.model : '未配置模型'}</span>
-            </button>
-            <button type="button" className="btn sm" onClick={openConfigModal}>
-              <Icon name="config" size={13} />模型配置
-            </button>
+            {isAdmin ? (
+              <Link
+                to="/ai-settings"
+                className={`ai-model-chip${config?.ready ? ' ready' : ' unconfigured'}`}
+                title="前往「系统管理 → 模型配置」调整接入参数"
+              >
+                <span className={`ai-model-dot${config?.ready ? ' ok' : ''}`} />
+                <span>{config?.ready ? config.model : '未配置模型'}</span>
+              </Link>
+            ) : (
+              <span className={`ai-model-chip${config?.ready ? ' ready' : ' unconfigured'}`}>
+                <span className={`ai-model-dot${config?.ready ? ' ok' : ''}`} />
+                <span>{config?.ready ? config.model : '服务未就绪'}</span>
+              </span>
+            )}
           </div>
         </header>
 
@@ -512,11 +442,13 @@ export default function AiChat() {
                 <div className="ai-setup-callout">
                   <div>
                     <b>尚未配置大模型接入参数</b>
-                    <span>支持所有 OpenAI 兼容协议（智谱 BigModel / 阿里云百炼 / DeepSeek / 自定义服务）</span>
+                    <span>请在「系统管理 → 模型配置」中填写 OpenAI 兼容服务地址与 API Key 后开始使用</span>
                   </div>
-                  <button type="button" className="btn sm primary" onClick={openConfigModal}>
-                    立即配置模型
-                  </button>
+                  {isAdmin && (
+                    <Link className="btn sm primary" to="/ai-settings">
+                      前往模型配置
+                    </Link>
+                  )}
                 </div>
               )}
 
@@ -616,7 +548,7 @@ export default function AiChat() {
               placeholder={
                 config?.ready
                   ? '输入业务问题，如“11月欠款最多的客户是谁？”（Enter 发送，Shift+Enter 换行）'
-                  : '请先点击右上角「模型配置」填写 OpenAI 兼容 API Key 与模型名…'
+                  : '尚未配置模型，请先在「系统管理 → 模型配置」中完成设置…'
               }
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -649,172 +581,6 @@ export default function AiChat() {
           </div>
         </div>
       </section>
-
-      {/* OpenAI 兼容模型配置弹窗（通过 Portal 挂载至 body，确保层级高于顶栏） */}
-      {cfgOpen && cfgDraft && createPortal(
-        <div className="modal-backdrop" onClick={() => setCfgOpen(false)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="AI 模型配置"
-            style={{ maxWidth: 620 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-header">
-              <div>
-                <h3>AI 模型配置（OpenAI 兼容协议）</h3>
-                <p className="sub">配置保存在数据库，API Key 自动脱敏不回传明文</p>
-              </div>
-              <button type="button" className="btn sm ghost" onClick={() => setCfgOpen(false)}>关闭</button>
-            </div>
-
-            <div className="modal-body">
-              {cfgErr && <div className="error-banner">{cfgErr}</div>}
-              {cfgMsg && (
-                <div className="sync-notice">
-                  <Icon name="check" size={14} />
-                  <span>{cfgMsg}</span>
-                </div>
-              )}
-
-              <div className="form-section">
-                <div className="sec-title">
-                  <b>快捷模板</b>
-                  <span>点击一键填入对应平台的 OpenAI 兼容地址</span>
-                </div>
-                <div className="ai-preset-row">
-                  {PROVIDER_PRESETS.map((p) => (
-                    <button
-                      type="button"
-                      key={p.name}
-                      className={`sync-preset-btn${cfgDraft.baseUrl === p.baseUrl ? ' active' : ''}`}
-                      onClick={() => setCfgDraft({ ...cfgDraft, baseUrl: p.baseUrl, model: p.model, enabled: true })}
-                    >
-                      {p.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="form-section">
-                <div className="sec-title">
-                  <b>接口参数</b>
-                  <label className="sync-toggle-inline" style={{ marginLeft: 'auto' }}>
-                    <span>{cfgDraft.enabled ? '已启用' : '已停用'}</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={cfgDraft.enabled}
-                      className={`sync-switch${cfgDraft.enabled ? ' on' : ''}`}
-                      onClick={() => setCfgDraft({ ...cfgDraft, enabled: !cfgDraft.enabled })}
-                    >
-                      <span className="sync-switch-thumb" />
-                    </button>
-                  </label>
-                </div>
-
-                <div className="field">
-                  <label>API Base URL <span className="req">*</span></label>
-                  <input
-                    className="input mono"
-                    placeholder="https://open.bigmodel.cn/api/paas/v4"
-                    value={cfgDraft.baseUrl}
-                    onChange={(e) => setCfgDraft({ ...cfgDraft, baseUrl: e.target.value })}
-                  />
-                  <span className="hint">系统会自动补全 /chat/completions，无需重复填写路径</span>
-                </div>
-
-                <div className="form-grid">
-                  <div className="field">
-                    <label>模型名称（Model）<span className="req">*</span></label>
-                    <input
-                      className="input mono"
-                      placeholder="如 glm-4-plus / qwen-plus / deepseek-chat"
-                      value={cfgDraft.model}
-                      onChange={(e) => setCfgDraft({ ...cfgDraft, model: e.target.value })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>
-                      API Key <span className="req">*</span>
-                      {cfgDraft.hasApiKey && <span className="muted">（已保存，留空不覆盖）</span>}
-                    </label>
-                    <input
-                      className="input mono"
-                      type="password"
-                      autoComplete="new-password"
-                      placeholder={cfgDraft.hasApiKey ? '******（保留原密钥）' : 'sk-...'}
-                      value={cfgDraft.apiKey === '******' ? '' : cfgDraft.apiKey}
-                      onChange={(e) => setCfgDraft({ ...cfgDraft, apiKey: e.target.value })}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="form-section">
-                <div className="sec-title">
-                  <b>运行参数</b>
-                  <span>控制回答发散度与多步查询上限</span>
-                </div>
-                <div className="form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
-                  <div className="field">
-                    <label>Temperature</label>
-                    <input
-                      className="input mono"
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="1.5"
-                      value={cfgDraft.temperature}
-                      onChange={(e) => setCfgDraft({ ...cfgDraft, temperature: Number(e.target.value) })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>最大工具轮次</label>
-                    <input
-                      className="input mono"
-                      type="number"
-                      min="1"
-                      max="8"
-                      value={cfgDraft.maxToolRounds}
-                      onChange={(e) => setCfgDraft({ ...cfgDraft, maxToolRounds: Number(e.target.value) || 4 })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>超时时间（秒）</label>
-                    <input
-                      className="input mono"
-                      type="number"
-                      min="10"
-                      max="180"
-                      value={cfgDraft.timeoutSeconds}
-                      onChange={(e) => setCfgDraft({ ...cfgDraft, timeoutSeconds: Number(e.target.value) || 60 })}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              <button
-                type="button"
-                className="btn"
-                style={{ marginRight: 'auto' }}
-                disabled={cfgTesting}
-                onClick={testConfig}
-              >
-                {cfgTesting ? '测试中…' : '测试连接'}
-              </button>
-              <button type="button" className="btn" onClick={() => setCfgOpen(false)}>取消</button>
-              <button type="button" className="btn primary" disabled={cfgSaving} onClick={saveConfig}>
-                {cfgSaving ? '保存中…' : '保存配置'}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
     </div>
   )
 }
