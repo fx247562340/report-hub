@@ -80,7 +80,27 @@ public class ReportController {
             return ApiResponse.ok(resultCache.toQueryResult(hit, page, pageSize));
         }
 
-        // 先按页快速返回；同时预热全量缓存，紧接着导出可秒开
+        // 本地模式：queryLocal 一次即算出全量排序行，直接写入结果缓存供翻页与导出复用，不再后台重复计算
+        if (queryModeService.isLocal() && !com.reporthub.service.ContractScrollService.REPORT_CODE.equals(report.getCode())) {
+            long t0 = System.currentTimeMillis();
+            var holder = new java.util.concurrent.atomic.AtomicReference<ReportQueryEngine.QueryResult>();
+            var full = resultCache.getOrLoad(cacheKey, () -> {
+                var res = loadFullResult(report.getCode(), filters);
+                holder.set(res);
+                return new ReportResultCache.CachedResult(
+                        res.columns(), res.rows(), res.total(), System.currentTimeMillis());
+            });
+            var sliced = resultCache.toQueryResult(full, page, pageSize);
+            var fresh = holder.get();
+            if (fresh != null) {
+                return ApiResponse.ok(new ReportQueryEngine.QueryResult(
+                        sliced.columns(), sliced.rows(), sliced.page(), sliced.pageSize(),
+                        sliced.total(), fresh.trace(), System.currentTimeMillis() - t0));
+            }
+            return ApiResponse.ok(sliced);
+        }
+
+        // 实时模式：先按页快速返回；同时预热全量缓存，紧接着导出可秒开
         resultCache.warmAsync(cacheKey, () -> loadFull(report.getCode(), filters));
         return ApiResponse.ok(engine.query(report, ReportQueryEngine.QueryRequest.of(filters, page, pageSize)));
     }
@@ -142,10 +162,14 @@ public class ReportController {
         return "";
     }
 
-    private ReportResultCache.CachedResult loadFull(String code, Map<String, Object> filters) {
+    private ReportQueryEngine.QueryResult loadFullResult(String code, Map<String, Object> filters) {
         var report = configService.getReport(code);
         int exportPageSize = Math.max(1000, engine.maxRootRows());
-        var result = engine.query(report, ReportQueryEngine.QueryRequest.of(filters, 1, exportPageSize));
+        return engine.query(report, ReportQueryEngine.QueryRequest.of(filters, 1, exportPageSize));
+    }
+
+    private ReportResultCache.CachedResult loadFull(String code, Map<String, Object> filters) {
+        var result = loadFullResult(code, filters);
         return new ReportResultCache.CachedResult(
                 result.columns(), result.rows(), result.total(), System.currentTimeMillis());
     }

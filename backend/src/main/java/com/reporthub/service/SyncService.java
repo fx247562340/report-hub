@@ -42,6 +42,7 @@ public class SyncService {
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
     private final ReportResultCache resultCache;
+    private final SyncStore syncStore;
     private final ExecutorService pool = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "sync-runner");
         t.setDaemon(true);
@@ -181,7 +182,7 @@ public class SyncService {
     public SyncService(SyncConfigRepo configRepo, SyncJobRepo jobRepo, SyncRecordRepo recordRepo,
                        DatasetRepo datasetRepo, ApiEndpointRepo endpointRepo, DataSourceRepo dataSourceRepo,
                        UpstreamClient upstream, ObjectMapper mapper, TransactionTemplate tx,
-                       ReportResultCache resultCache) {
+                       ReportResultCache resultCache, SyncStore syncStore) {
         this.configRepo = configRepo;
         this.jobRepo = jobRepo;
         this.recordRepo = recordRepo;
@@ -192,6 +193,7 @@ public class SyncService {
         this.mapper = mapper;
         this.tx = tx;
         this.resultCache = resultCache;
+        this.syncStore = syncStore;
     }
 
     public List<Map<String, Object>> listStatus() {
@@ -388,7 +390,8 @@ public class SyncService {
             job.setDurationMs((int) (System.currentTimeMillis() - t0));
             job.setFinishedAt(Instant.now());
             jobRepo.save(job);
-            // 同步完成后主动失效报表与经营看板缓存，确保立刻读到最新数据
+            // 同步完成后主动失效本地行缓存、报表与经营看板缓存，确保立刻读到最新数据
+            if (syncStore != null) syncStore.invalidate(cfg.getDatasetCode());
             resultCache.invalidateAll();
             log.info("sync ok dataset={} rows={} pages={} ms={}", cfg.getDatasetCode(), rows, pages, job.getDurationMs());
         } catch (Exception e) {

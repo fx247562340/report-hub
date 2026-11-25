@@ -29,6 +29,9 @@ public class ReportQueryEngine {
     private final SyncStore syncStore;
     private final QueryModeService queryModeService;
     private final ContractScrollService contractScrollService;
+    private final Map<String, CachedLocalDataset> localDatasetCache = new ConcurrentHashMap<>();
+
+    private record CachedLocalDataset(String versionToken, String rulesSig, Dataset dataset) {}
 
     public ReportQueryEngine(ObjectMapper mapper,
                              UpstreamClient upstream,
@@ -227,24 +230,80 @@ public class ReportQueryEngine {
         return new RootFetch(data, upstreamTotal);
     }
 
-    /** 本地数据模式：上游原始行已在 sync_records，复用同一套映射与关联 */
+    /** 本地数据模式：上游原始行已在 sync_records，复用同一套映射与关联；先按主表条件预过滤再 Join 与公式计算 */
     private QueryResult queryLocal(ReportDef report, QueryRequest req, List<TraceCall> trace,
                                    List<FieldRuleBundle> bundles, List<RelationDef> relations, long t0) {
+        Map<String, Object> remapped = remapLocalFilters(report, req.filters());
+        Map<String, String> ops = filterOps(report);
+        boolean hasUnion = relations.stream().anyMatch(r -> "union".equalsIgnoreCase(r.getJoinType()));
+
         Dataset root = loadLocal(report.getRootDataset(), trace, bundles);
+        if (!hasUnion && remapped != null && !remapped.isEmpty()) {
+            root = preFilterRoot(root, report, remapped, ops);
+        }
+
         Dataset current = root;
-        for (RelationDef rel : relations) {
-            Dataset right = loadLocal(rel.getRightDataset(), trace, bundles);
-            current = combine(current, right, rel);
+        if (!current.rows().isEmpty()) {
+            for (RelationDef rel : relations) {
+                Dataset right = loadLocal(rel.getRightDataset(), trace, bundles);
+                current = combine(current, right, rel);
+                if (current.rows().isEmpty() && !"union".equalsIgnoreCase(rel.getJoinType())) break;
+            }
         }
         List<Map<String, Object>> projected = project(current, report);
         if (hasGroupSpec(report)) projected = groupRows(projected, report);
         applyCalcs(projected, report);
-        List<Map<String, Object>> all = applyInMemoryFilters(projected, remapLocalFilters(report, req.filters()), filterOps(report));
+        List<Map<String, Object>> all = applyInMemoryFilters(projected, remapped, ops);
         sortRows(all, report);
         long total = all.size();
         List<Map<String, Object>> pageRows = paginate(all, req.page(), req.pageSize());
         return new QueryResult(parseResultColumns(report), pageRows, req.page(), req.pageSize(), total,
                 trace, System.currentTimeMillis() - t0);
+    }
+
+    /**
+     * 筛选前置：把仅依赖主表非计算列的筛选条件直接下推到 root，在 Join 和 CalcEvaluator 之前裁掉 90%+ 无关行。
+     */
+    Dataset preFilterRoot(Dataset root, ReportDef report, Map<String, Object> remapped, Map<String, String> ops) {
+        Set<String> calcKeys = new HashSet<>();
+        for (CalcEvaluator.CalcField c : parseCalcs(report)) calcKeys.add(c.key());
+
+        Set<String> aggKeys = new HashSet<>();
+        Map<String, Object> groupSpec = readJsonMap(report.getGroupJson());
+        if (groupSpec.get("aggs") instanceof List<?> aggs) {
+            for (Object o : aggs) {
+                if (o instanceof Map<?, ?> m && m.get("key") != null) aggKeys.add(String.valueOf(m.get("key")));
+            }
+        }
+
+        String rootDs = report.getRootDataset();
+        Map<String, String> colFromByKey = new HashMap<>();
+        for (Map<String, Object> col : parseColumns(report)) {
+            if (col.get("key") == null) continue;
+            String key = String.valueOf(col.get("key"));
+            String from = col.get("from") == null ? key : String.valueOf(col.get("from"));
+            colFromByKey.put(key, from);
+        }
+
+        Map<String, Object> rootFilters = new LinkedHashMap<>();
+        Map<String, String> rootOps = new HashMap<>();
+        for (Map.Entry<String, Object> e : remapped.entrySet()) {
+            String k = e.getKey();
+            if (e.getValue() == null || calcKeys.contains(k) || aggKeys.contains(k)) continue;
+            String from = colFromByKey.get(k);
+            if (from == null) continue;
+            boolean belongsToRoot = from.startsWith(rootDs + ".") || !from.contains(".");
+            if (!belongsToRoot) continue;
+            rootFilters.put(from, e.getValue());
+            String op = ops == null ? null : ops.get(k);
+            if (op != null) rootOps.put(from, op);
+        }
+        if (rootFilters.isEmpty()) return root;
+
+        List<Map<String, Object>> filtered = applyInMemoryFilters(root.rows(), rootFilters, rootOps);
+        Dataset narrowed = new Dataset(rootDs);
+        for (Map<String, Object> r : filtered) narrowed.addRow(r);
+        return narrowed;
     }
 
     /**
@@ -279,11 +338,32 @@ public class ReportQueryEngine {
 
     private Dataset loadLocal(String datasetCode, List<TraceCall> trace, List<FieldRuleBundle> bundles) {
         long t0 = System.currentTimeMillis();
+        List<JsonPaths.FieldRule> rules = rulesFor(bundles, datasetCode);
+        String ver = syncStore.versionToken(datasetCode);
+        String sig = rulesSignature(rules);
+        CachedLocalDataset hit = localDatasetCache.get(datasetCode);
+        if (hit != null && hit.versionToken().equals(ver) && hit.rulesSig().equals(sig)) {
+            trace.add(new TraceCall("local-cache", "sync_records", datasetCode,
+                    hit.dataset().rows().size(), System.currentTimeMillis() - t0));
+            return hit.dataset();
+        }
         List<com.fasterxml.jackson.databind.node.ObjectNode> raw = syncStore.loadRaw(datasetCode);
-        List<Map<String, Object>> mapped = upstream.mapAll(raw, rulesFor(bundles, datasetCode));
+        List<Map<String, Object>> mapped = upstream.mapAll(raw, rules);
+        Dataset ds = materialize(datasetCode, mapped);
+        localDatasetCache.put(datasetCode, new CachedLocalDataset(ver, sig, ds));
         trace.add(new TraceCall("local", "sync_records", datasetCode, mapped.size(),
                 System.currentTimeMillis() - t0));
-        return materialize(datasetCode, mapped);
+        return ds;
+    }
+
+    private static String rulesSignature(List<JsonPaths.FieldRule> rules) {
+        if (rules == null || rules.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (JsonPaths.FieldRule r : rules) {
+            sb.append(r.sourcePath()).append('>').append(r.targetField())
+                    .append(':').append(r.dataType()).append(':').append(r.transform()).append(';');
+        }
+        return sb.toString();
     }
 
     private Dataset fetchRelated(RelationDef rel, Dataset left, QueryRequest req,
