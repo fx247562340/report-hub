@@ -1,110 +1,43 @@
 import { Link } from 'react-router-dom'
+import { getUser } from '../api/client'
 import Icon from '../components/Icon'
 
-const steps = [
+const BUILTIN_REPORTS = [
   {
-    n: '01',
-    title: '数据源',
-    to: '/datasources',
-    icon: 'datasource' as const,
-    goal: '告诉系统：上游业务系统在哪、怎么登录。',
-    fields: [
-      ['编码 / 名称', '系统标识与展示名（编码保存后不可改）'],
-      ['Base URL', '业务系统入口，接口路径会拼在它后面'],
-      ['认证方式', '按上游能力选择，见下表'],
-    ],
-    tips: [
-      '先用「测试登录」确认凭证可用，再往下配接口。',
-      '同一套报表可同时挂多个数据源（如 ERP + MES）。',
-    ],
+    code: 'rpt_contract_scroll',
+    name: '销售合同滚动统计报表',
+    desc: '以 2026-10 为期初基线，按月自动滚动核算黑件来料/出库、白件入库/发货、开票、回款核销与期末总欠款，并自动发现新签 U9 销售订单。',
+    sources: 'U9 Cloud ERP（9 张业务单据 + 期初基线）',
   },
   {
-    n: '02',
-    title: '接口',
-    to: '/endpoints',
-    icon: 'api' as const,
-    goal: '描述一次业务调用：路径、参数、返回里列表在哪。',
-    fields: [
-      ['方法 / 路径', '相对 Base URL 的业务接口，如 /webapi/XXX/Query'],
-      ['查询参数', '拼在 URL 上，值可用占位符 {{filter.xxx}}、{{page}}'],
-      ['列表路径', '返回 JSON 里数组字段，如 data 或 Data'],
-      ['总数路径', '可选，分页算总页数用，如 count'],
-    ],
-    tips: [
-      '占位符只是本地变量名；左边「参数名」才是发给上游的真实字段。',
-      '用「测试调用」看原始返回，确认列表路径没填错。',
-    ],
+    code: 'rpt_hang_complete',
+    name: '挂次日报表',
+    desc: '自动关联瑞马 MES 完工挂次、锌层厚度与 U9 完工报告、生产订单，用于日常生产追溯与产销核对。',
+    sources: '瑞马 MES + U9 Cloud ERP',
   },
   {
-    n: '03',
-    title: '数据集',
-    to: '/datasets',
-    icon: 'dataset' as const,
-    goal: '把接口原始字段，映射成报表里稳定的列名。',
-    fields: [
-      ['绑定接口', '这个数据集从哪条接口取数'],
-      ['接口字段', '上游 JSON 路径，如 allbatchnoweight 或 m_item.m_name'],
-      ['报表列名', '映射后的 target，如 order_weight'],
-      ['类型 / 转换', 'string / number / date；可选 trim 等'],
-    ],
-    tips: [
-      '报表只认映射后的列名，不直接吃上游原始字段名。',
-      '数值带空格、补零等脏数据，在映射阶段 trim / 转类型。',
-    ],
+    code: 'rpt_white_weight_diff',
+    name: '挂次白件重量差异表',
+    desc: '自动比对 MES 挂次白件称重与 U9 完工/入库重量，快速筛查超差或缺失完工报告的异常挂次。',
+    sources: '瑞马 MES + U9 Cloud ERP',
   },
   {
-    n: '04',
-    title: '报表',
-    to: '/reports',
-    icon: 'report' as const,
-    goal: '定一张业务报表：主表、展示列、筛选、分页。',
-    fields: [
-      ['主数据集', '报表的行从哪张表来'],
-      ['展示列', '列标识 + 表头 + 来源「数据集.字段」，可上下移排序'],
-      ['筛选与排序', '参数名、显示名、类型（日期范围 / 下拉 / 文本）'],
-      ['分页', '每页条数、请求参数名、总数字段路径'],
-    ],
-    tips: [
-      '筛选参数名要和接口查询参数里的占位符对上。',
-      '计算列 / 判断列可单独配置，变量用展示列的列标识。',
-    ],
+    code: 'rpt_cust_month_in',
+    name: '客户月度黑件入库表',
+    desc: '按月汇总各客户黑件杂收来料明细与吨位统计。',
+    sources: 'U9 Cloud ERP（BF003 客供库）',
   },
   {
-    n: '05',
-    title: '关联关系',
-    to: '/relations',
-    icon: 'relation' as const,
-    goal: '多系统拼行：左表键 → 右表键，选好取数策略。',
-    fields: [
-      ['左右数据集', '主表与被关联表'],
-      ['关联字段', '值相等则匹配，可多组'],
-      ['取数策略', '见下表，按接口能力选'],
-      ['展开方式', '1:N 时摊平多行或保持嵌套'],
-    ],
-    tips: [
-      '接口能力不确定时可随时切换策略，字段配置可复用。',
-      '一对多会摊成多行；多对一不会改变行数。',
-    ],
-  },
-  {
-    n: '06',
-    title: '查询与导出',
-    to: '/reports',
-    icon: 'search' as const,
-    goal: '业务人员选条件出报表；管理员可看调用链。',
-    fields: [
-      ['筛选', '日期范围、下拉、文本；空条件表示不限制'],
-      ['执行查询', '实时调上游，不落业务库'],
-      ['导出 Excel', '按当前筛选导出全量；短时间重复导出走结果缓存'],
-    ],
-    tips: [
-      '行数过多时先收窄日期 / 状态条件。',
-      '管理员在查询页底部可看「取数调用链」排错。',
-    ],
+    code: 'rpt_cust_month_out',
+    name: '客户月度白件出库表',
+    desc: '按月汇总各客户白件成品发货明细与吨位统计。',
+    sources: 'U9 Cloud ERP（BF004 成品库）',
   },
 ]
 
 export default function About() {
+  const isAdmin = getUser()?.role === 'admin'
+
   return (
     <>
       <div className="page-head">
@@ -112,149 +45,114 @@ export default function About() {
           <div className="icon-tile"><Icon name="help" size={22} /></div>
           <div>
             <h1>使用说明</h1>
-            <p>按配置流程，把任意多源接口拼成一张可查询、可导出的报表</p>
+            <p>智能镀锌经营分析与多源报表平台 · 开箱即用的看板、自动同步与核算体系</p>
           </div>
+        </div>
+        <div className="row">
+          <Link className="btn sm" to="/"><Icon name="home" size={13} />经营看板</Link>
+          <Link className="btn sm primary" to="/reports"><Icon name="report" size={13} />进入报表中心</Link>
         </div>
       </div>
 
       <div className="stack">
         <div className="card">
-          <h3>这套系统解决什么</h3>
-          <div className="sub">配置驱动 · 实时聚合 · 不落业务库</div>
-          <p style={{ margin: 0, lineHeight: 1.7, color: 'var(--text-2)', fontSize: 13 }}>
-            当同一张报表要跨 ERP / MES / 自建接口取数，且字段名、分页方式、登录方式各不相同时，
-            不必为每张报表写死代码。只要按下面六步把「连接 → 接口 → 字段 → 报表 → 关联」配好，
-            查询时引擎会实时调上游、映射字段、按策略关联，最后拼成一张表，并可导出 Excel。
-            业务数据始终以源系统为准，本平台只保存配置。
+          <h3>平台定位与核心能力</h3>
+          <div className="sub">自动对接 U9 ERP 与瑞马 MES · 定时同步落库 · 系统自动核算</div>
+          <p style={{ margin: 0, lineHeight: 1.75, color: 'var(--text-2)', fontSize: 13 }}>
+            本平台面向日常经营决策与财务/生产对账，已由系统内置完成 U9 Cloud ERP 与瑞马 MES 的数据接入、字段对齐、定时增量同步与月度滚动核算逻辑。
+            日常使用时<strong>无需手工配置接口或拼装公式</strong>，打开系统即可查看经营驾驶舱、按月查询明细报表并一键导出标准 Excel。
           </p>
-        </div>
-
-        <div className="card">
-          <h3>配置总览</h3>
-          <div className="sub">从下到上依赖，改完上层无需改下层</div>
-          <div className="code-block">{`数据源  ──  认证 / Base URL
-   │
-接口    ──  路径 · 参数模板 · 列表路径
-   │
-数据集  ──  字段映射（原始字段 → 报表列）
-   │
-报表    ──  主表 · 展示列 · 筛选 · 分页
-   │
-关联    ──  多数据集拼行（可多条、可混用策略）
-   │
-查询 / 导出`}</div>
-          <div className="row" style={{ marginTop: 12 }}>
-            <Link className="btn sm" to="/datasources"><Icon name="datasource" size={13} />1 数据源</Link>
-            <Link className="btn sm" to="/endpoints"><Icon name="api" size={13} />2 接口</Link>
-            <Link className="btn sm" to="/datasets"><Icon name="dataset" size={13} />3 数据集</Link>
-            <Link className="btn sm" to="/reports"><Icon name="report" size={13} />4 报表</Link>
-            <Link className="btn sm" to="/relations"><Icon name="relation" size={13} />5 关联</Link>
+          <div className="about-feature-grid">
+            <div className="about-feature">
+              <div className="about-feature-title">
+                <Icon name="trend" size={15} />
+                <b>经营驾驶舱（首页）</b>
+              </div>
+              <p>汇总当月白件发货、开票、回款、期末总欠款与在制库存及环比变化；点击趋势柱体切换月份，点击欠款客户或负库存预警直接下钻定位到合同明细。</p>
+            </div>
+            <div className="about-feature">
+              <div className="about-feature-title">
+                <Icon name="sync" size={15} />
+                <b>本地同步库 + 实时双模式</b>
+              </div>
+              <p>日常默认走「本地数据」：系统按计划自动同步上游单据，看板与全部 5 张报表毫秒级响应、不给 ERP/MES 增压；核对刚录入单据时管理员可临时切「实时聚合」。</p>
+            </div>
+            <div className="about-feature">
+              <div className="about-feature-title">
+                <Icon name="download" size={15} />
+                <b>全量导出与快捷导航</b>
+              </div>
+              <p>支持按当前筛选条件导出全量 Excel（含双层表头与合计行）；随时按 <kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd> 快速跳转任意报表，左下角可收起侧栏获得全宽大屏视野。</p>
+            </div>
           </div>
         </div>
 
-        {steps.map((s) => (
-          <div className="card" key={s.n}>
-            <div className="spread" style={{ marginBottom: 8 }}>
-              <div className="row" style={{ gap: 12 }}>
-                <div className="icon-tile" style={{ width: 36, height: 36 }}>
-                  <Icon name={s.icon} size={18} />
+        <div className="card">
+          <h3>已内置核心报表</h3>
+          <div className="sub">系统自动维护口径与关联，点名称直接进入查询</div>
+          <div className="about-report-list">
+            {BUILTIN_REPORTS.map((r) => (
+              <Link to={`/reports/${r.code}`} key={r.code} className="about-report-item">
+                <div className="about-report-main">
+                  <div className="about-report-name">
+                    <b>{r.name}</b>
+                    <span className="badge muted">{r.sources}</span>
+                  </div>
+                  <p>{r.desc}</p>
                 </div>
-                <div>
-                  <h3 style={{ margin: 0 }}>{s.n} · {s.title}</h3>
-                  <div className="sub" style={{ margin: '4px 0 0' }}>{s.goal}</div>
-                </div>
-              </div>
-              <Link className="btn sm ghost" to={s.to}>去配置<Icon name="arrowLeft" size={12} className="flip-x" /></Link>
-            </div>
-            <div className="kv" style={{ marginBottom: 12 }}>
-              {s.fields.map(([k, v]) => (
-                <div key={k} style={{ display: 'contents' }}>
-                  <div className="k">{k}</div>
-                  <div>{v}</div>
-                </div>
-              ))}
-            </div>
-            {s.tips.map((t) => (
-              <div key={t} className="hint-line">
-                <Icon name="check" size={13} />
-                <span>{t}</span>
-              </div>
+                <Icon name="chevronRight" size={15} className="about-report-arrow" />
+              </Link>
             ))}
           </div>
-        ))}
+        </div>
 
         <div className="card">
-          <h3>认证方式怎么选</h3>
-          <div className="sub">数据源 · 认证，按上游能力选一种</div>
+          <h3>日常使用技巧</h3>
+          <div className="sub">适用于所有账号（查询员 &amp; 管理员）</div>
           <div className="kv">
-            <div className="k">无需认证</div>
-            <div>内网或开放接口</div>
-            <div className="k">Basic / Bearer / API Key</div>
-            <div>每次请求固定带凭证</div>
-            <div className="k">登录会话</div>
-            <div>先调登录接口拿 Cookie / Token，再调业务；失效自动重登（如 MES 签名登录）</div>
-            <div className="k">U9C OAuth</div>
-            <div>OAuth2/AuthLogin 换 token，业务请求头带 token</div>
+            <div className="k">看板联动下钻</div>
+            <div>在「经营看板」点击任意 KPI 卡片、客户欠款排行或负库存预警行，会自动跳转至《销售合同滚动统计报表》并带入对应月份与客户/合同号筛选。</div>
+            <div className="k">筛选链接分享</div>
+            <div>滚动报表的月份、合同号、客户筛选会自动同步到浏览器地址栏，刷新页面条件不丢失，复制链接发给同事可直接打开同一视图。</div>
+            <div className="k">宽表浏览模式</div>
+            <div>查看 42 列滚动报表时，可点击左侧边栏底部「收起」将菜单缩为图标栏，最大化横向表格可视区域。</div>
+            <div className="k">快捷搜索跳转</div>
+            <div>在任意页面按 <span className="mono">⌘K</span>（Windows 按 <span className="mono">Ctrl+K</span>）唤起搜索面板，用方向键和回车直达目标报表。</div>
+            <div className="k">账号与密码</div>
+            <div>点击右上角头像进入「个人中心」，可随时修改显示名称和登录密码。</div>
           </div>
         </div>
 
-        <div className="card">
-          <h3>关联取数策略</h3>
-          <div className="sub">同一张报表可混用；接口能力变了一键切换</div>
-          <div className="kv">
-            <div className="k">双侧列表 dual_list</div>
-            <div>左右各查列表再内存关联。适合两边都能按条件拉列表。</div>
-            <div className="k">批量 IN child_batch</div>
-            <div>主表键收齐后一次查子表（?ids=a,b,c）。适合「按 id 列表查详情」。</div>
-            <div className="k">逐条单查 child_lookup</div>
-            <div>主表键并发单查。适合只能单键查询的详情接口；行数多时较慢。</div>
+        {isAdmin && (
+          <div className="card">
+            <h3>管理员运维指南</h3>
+            <div className="sub">系统已自动化运行，以下入口仅在日常巡检或口径调整时使用</div>
+            <div className="kv">
+              <div className="k"><Link to="/sync" style={{ color: 'var(--accent)' }}>数据同步</Link></div>
+              <div>13 个核心数据集已配置每日自动同步。若上游补录/修改了历史月份单据，可点单表「全量同步」重拉；同步异常时侧栏与看板顶部会亮红点提示。</div>
+              <div className="k"><Link to="/reports/rpt_contract_scroll" style={{ color: 'var(--accent)' }}>期初基线维护</Link></div>
+              <div>在《销售合同滚动统计报表》右上角点「期初基线」，可维护 2026-10 期初结存或补充纸质合同号与 U9 项目号/订单号映射，保存后自动生效。</div>
+              <div className="k">查询模式切换</div>
+              <div>顶栏「实时聚合 / 本地数据」切换为全局生效，仅管理员可操作。切换后系统自动失效缓存，日常建议保持「本地数据」。</div>
+              <div className="k"><Link to="/users" style={{ color: 'var(--accent)' }}>用户管理</Link></div>
+              <div>系统已关闭公开自助注册，所有账号统一在「用户管理」中创建、分配角色（管理员 / 查询员）或重置密码。</div>
+              <div className="k">底层集成配置</div>
+              <div>左侧「数据集成」下的「数据源 / 接口管理 / 数据集 / 关联关系」已预置完成，日常无需改动；仅在更换上游密钥、增补字段或扩展新系统时调整（密钥在前端自动脱敏，留空或保持 <span className="mono">******</span> 不会覆盖原密钥）。</div>
+            </div>
           </div>
-        </div>
-
-        <div className="card">
-          <h3>筛选条件如何接到接口</h3>
-          <div className="sub">两边名字可以不同，靠接口「查询参数」对齐</div>
-          <div className="code-block">{`报表筛选                    接口查询参数
-─────────────────           ────────────────────────────
-参数名 work_status     →    workStatusArr = {{filter.work_status}}
-显示名「挂次状态」            ↑左=上游真实参数  ↑右=筛选参数名
-
-参数名 endImmersionTime
-  开始 / 结束           →    hangStartTime = {{filter.endImmersionTime.start}}`}</div>
-          <ul className="about-list">
-            <li>日期范围只通过接口参数下推，不在本地二次过滤。</li>
-            <li>若筛选参数名与展示列 key 相同，还会在内存里做包含匹配。</li>
-            <li>日期留空时，对应参数不会拼进请求。</li>
-          </ul>
-        </div>
-
-        <div className="card">
-          <h3>角色与入口</h3>
-          <div className="sub">右上角头像进入个人中心；配置菜单仅管理员可见</div>
-          <div className="kv">
-            <div className="k">管理员</div>
-            <div>数据源 / 接口 / 数据集 / 报表 / 关联 / 用户管理 + 查询导出</div>
-            <div className="k">查询员</div>
-            <div>首页 / 报表查询 / 导出 / 个人中心</div>
-            <div className="k">个人中心</div>
-            <div>改显示名、改密码（顶栏头像进入）</div>
-          </div>
-          <div className="code-block" style={{ marginTop: 12 }}>{`首次部署会初始化管理员
-  用户名：admin
-  密码：  123456（登录后请立刻在「个人中心」修改）`}</div>
-        </div>
+        )}
 
         <div className="card">
           <h3>常见问题</h3>
           <div className="kv">
-            <div className="k">查不到数据</div>
-            <div>先「测试调用」接口看原始 JSON；核对列表路径、筛选参数名、关联键是否一致</div>
-            <div className="k">某列一直空</div>
-            <div>数据集 · 字段映射的「接口字段」路径是否正确；注意 trim 与类型</div>
-            <div className="k">导出很慢 / 失败</div>
-            <div>收窄筛选；大量「逐条单查」关联会随行数变慢，可改批量 IN</div>
-            <div className="k">改了配置没生效</div>
-            <div>保存后重新执行查询；结果缓存约 10 分钟，改配置会自动失效</div>
+            <div className="k">刚录完单据没看到</div>
+            <div>当前处于「本地数据」模式时，数据按定时计划同步更新；如需立即看到刚在 U9/MES 录入的单据，可请管理员在「数据同步」点一次增量同步，或临时切到「实时聚合」核对。</div>
+            <div className="k">滚动表出现负库存</div>
+            <div>代表按期初结存 + 系统累计入库扣除系统累计出库/发货后为负，常见于 10 月期初手工账偏差或单据跨月补录。可在首页「负库存预警」一键定位核对。</div>
+            <div className="k">新签合同如何纳入</div>
+            <div>2026-11 起在 U9 录入的镀锌销售订单（1104 料品）同步后会自动出现在《销售合同滚动统计报表》中，无需手工加行；若纸质合同号与 U9 订单号不同，可在期初基线里关联映射。</div>
+            <div className="k">导出包含哪些数据</div>
+            <div>点击「导出 Excel」始终导出当前筛选条件下的全部匹配行（不受页面分页影响），滚动报表会保留双层表头、合同合并与底部合计行。</div>
           </div>
         </div>
       </div>

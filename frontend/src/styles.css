@@ -1820,6 +1820,11 @@ tbody tr:hover { background: rgba(255,255,255,.02); }
   color: var(--text-2);
   background: rgba(255, 255, 255, .02);
 }
+.nav-group-title-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .nav-label {
   flex: 1;
   min-width: 0;
@@ -2489,6 +2494,100 @@ tbody tr:hover { background: rgba(255,255,255,.02); }
 }
 .icon-svg.spin {
   animation: spin360 .9s linear infinite;
+}
+
+/* ===== About page (modern platform guide) ===== */
+.about-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+@media (max-width: 900px) {
+  .about-feature-grid { grid-template-columns: 1fr; }
+}
+.about-feature {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-soft);
+}
+.about-feature-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.about-feature-title b {
+  color: var(--text);
+  font-weight: 600;
+}
+.about-feature p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.about-feature kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.about-report-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.about-report-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-soft);
+  transition: border-color .15s ease, background .15s ease;
+}
+.about-report-item:hover {
+  border-color: rgba(93, 255, 122, .35);
+  background: var(--panel-2);
+}
+.about-report-main {
+  min-width: 0;
+}
+.about-report-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.about-report-name b {
+  font-size: 13px;
+  color: var(--text);
+}
+.about-report-main p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.about-report-arrow {
+  color: var(--muted-2);
+  flex-shrink: 0;
+  transition: color .15s ease, transform .15s ease;
+}
+.about-report-item:hover .about-report-arrow {
+  color: var(--accent);
+  transform: translateX(2px);
 }
 
 

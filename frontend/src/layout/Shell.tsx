@@ -53,6 +53,20 @@ const ROUTE_META: Record<string, { group?: string; title: string }> = {
 }
 
 const SIDEBAR_KEY = 'report_hub_sidebar_collapsed'
+const NAV_GROUPS_KEY = 'report_hub_nav_groups'
+
+function loadGroupOpenState(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(NAV_GROUPS_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object') {
+        return { analysis: true, integration: true, system: true, ...parsed }
+      }
+    }
+  } catch { /* ignore */ }
+  return { analysis: true, integration: true, system: true }
+}
 
 export default function Shell() {
   const user = getUser()
@@ -62,7 +76,7 @@ export default function Shell() {
 
   const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_KEY) === '1')
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [integrationOpen, setIntegrationOpen] = useState(true)
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>(loadGroupOpenState)
   const [menuOpen, setMenuOpen] = useState(false)
   const [cmdOpen, setCmdOpen] = useState(false)
   const [cmdQuery, setCmdQuery] = useState('')
@@ -100,7 +114,28 @@ export default function Shell() {
 
   useEffect(() => {
     setDrawerOpen(false)
+    // 当前路由命中某个分组时自动展开该分组，避免高亮项被折叠隐藏
+    const p = location.pathname
+    const matched = NAV_GROUPS.find((g) =>
+      g.items.some((it) => (it.to === '/' ? p === '/' : p === it.to || p.startsWith(it.to + '/')))
+    )
+    if (matched) {
+      setGroupOpen((prev) => {
+        if (prev[matched.key] !== false) return prev
+        const next = { ...prev, [matched.key]: true }
+        localStorage.setItem(NAV_GROUPS_KEY, JSON.stringify(next))
+        return next
+      })
+    }
   }, [location.pathname])
+
+  function toggleGroup(key: string) {
+    setGroupOpen((prev) => {
+      const next = { ...prev, [key]: !(prev[key] !== false) }
+      localStorage.setItem(NAV_GROUPS_KEY, JSON.stringify(next))
+      return next
+    })
+  }
 
   useEffect(() => {
     function onDoc(e: MouseEvent) {
@@ -242,23 +277,26 @@ export default function Shell() {
 
         <nav className="nav" aria-label="主导航">
           {visibleGroups.map((group) => {
-            const isCollapsible = group.key === 'integration' && !collapsed
-            const expanded = isCollapsible ? integrationOpen : true
+            const expanded = collapsed ? true : groupOpen[group.key] !== false
             return (
               <div className="nav-group" key={group.key}>
                 {!collapsed && (
-                  isCollapsible ? (
-                    <button
-                      type="button"
-                      className="nav-group-title clickable"
-                      onClick={() => setIntegrationOpen((v) => !v)}
-                    >
+                  <button
+                    type="button"
+                    className="nav-group-title clickable"
+                    aria-expanded={expanded}
+                    onClick={() => toggleGroup(group.key)}
+                  >
+                    <span className="nav-group-title-left">
                       <span>{group.title}</span>
-                      <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
-                    </button>
-                  ) : (
-                    <div className="nav-group-title">{group.title}</div>
-                  )
+                      {group.key === 'integration' && !expanded && syncFailed > 0 && (
+                        <span className="nav-badge err" title={`${syncFailed} 项同步异常`}>
+                          {syncFailed}
+                        </span>
+                      )}
+                    </span>
+                    <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
+                  </button>
                 )}
 
                 {expanded && group.items.map((item) => (
@@ -281,7 +319,7 @@ export default function Shell() {
                 ))}
 
                 {/* 业务分析组下方：常用报表一键直达 */}
-                {group.key === 'analysis' && !collapsed && reports.length > 0 && (
+                {expanded && group.key === 'analysis' && !collapsed && reports.length > 0 && (
                   <div className="nav-sublist">
                     {reports.slice(0, 5).map((r) => (
                       <NavLink
