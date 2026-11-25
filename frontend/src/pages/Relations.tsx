@@ -397,7 +397,7 @@ function buildLineageGraph(
       col: 2,
       title: report.name,
       subtitle: report.code,
-      tag: '单表聚合',
+      tag: '内置 · 单表聚合',
       badge: `${fieldCnt} 列 · ${filterCnt} 筛选`,
       badgeTone: 'ok',
       meta: '支持本地优先 / 实时切换',
@@ -481,7 +481,7 @@ function buildLineageGraph(
       col: rptCol,
       title: report.name,
       subtitle: report.code,
-      tag: '多表关联引擎',
+      tag: '内置 · 多表关联',
       badge: `${fieldCnt} 列 · ${filterCnt} 筛选`,
       badgeTone: 'ok',
       meta: '本地内存 Join / 实时并发查',
@@ -791,10 +791,13 @@ export default function Relations() {
           <div className="icon-tile sm"><Icon name="relation" size={18} /></div>
           <div style={{ minWidth: 0 }}>
             <h1>数据血缘与关联关系</h1>
-            <p className="one-line">只读展示各报表内置的数据源、接口、同步表与关联链路；点击任意节点或连线查看详情</p>
+            <p className="one-line">全部报表均由后端内置引擎统一维护，此处只读展示各报表的数据源、接口与表间血缘链路</p>
           </div>
         </div>
         <div className="row">
+          <span className="pill" title="全部报表关联规则已收归后端代码维护，不再依赖数据库配置表">
+            全部内置引擎 · 只读血缘
+          </span>
           {current && (
             <Link className="btn sm primary" to={`/reports/${current}`}>
               <Icon name="report" size={13} />查看报表
@@ -817,7 +820,6 @@ export default function Relations() {
             onClick={() => selectReport(r.code)}
           >
             <span>{r.name}</span>
-            {r.code === 'rpt_contract_scroll' && <em className="pill-tag">内置引擎</em>}
           </button>
         ))}
       </div>
@@ -833,10 +835,11 @@ export default function Relations() {
               <span className="rel-legend-item"><i className="dot ds" />数据集 / 接口</span>
               {isBuiltinEngine && <span className="rel-legend-item"><i className="dot stage" />核算环节</span>}
               <span className="rel-legend-item"><i className="dot rpt" />报表输出</span>
-              <span className="rel-legend-item">
-                <i className={`line ${isBuiltinEngine ? 'builtin' : 'join'}`} />
-                {isBuiltinEngine ? '核算链路' : '内置关联条件'}
-              </span>
+              {isBuiltinEngine ? (
+                <span className="rel-legend-item"><i className="line builtin" />内置核算链路</span>
+              ) : relationCount > 0 ? (
+                <span className="rel-legend-item"><i className="line join" />内置关联规则</span>
+              ) : null}
             </div>
             <div className="rel-zoom-controls">
               <button
@@ -1117,7 +1120,7 @@ export default function Relations() {
             <>
               <div className="rel-insp-head">
                 <span className="badge ok">
-                  {isBuiltinEngine ? (lineage?.builtin?.engineLabel || '内置核算引擎') : relationCount > 0 ? '多表关联报表' : '单表报表'}
+                  {isBuiltinEngine ? '内置 · 滚动核算引擎' : relationCount > 0 ? '内置 · 多表关联引擎' : '内置 · 单表聚合引擎'}
                 </span>
               </div>
               <h3>{currentReport?.name || '请选择报表'}</h3>
@@ -1131,7 +1134,7 @@ export default function Relations() {
                 <div><span>本地同步总行</span><b>{summary.totalRows.toLocaleString('zh-CN')} 行</b></div>
               </div>
               <div className="rel-insp-callout">
-                {lineage?.builtin?.callout || '所有报表的表间关联与核算逻辑已由系统代码统一维护，无需手工配置，此处仅做数据血缘可视化查看。'}
+                {lineage?.builtin?.callout || '该报表的表间关联与聚合规则已内置在后端代码中统一维护，不再落库配置，此处仅做只读数据血缘展示。'}
               </div>
             </>
           )}
