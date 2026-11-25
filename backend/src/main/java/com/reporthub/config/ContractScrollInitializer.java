@@ -81,17 +81,41 @@ public class ContractScrollInitializer implements CommandLineRunner {
     private void ensureDatasourceIfEmpty() {
         if (!props.isSeed()) return;
         if (dataSourceRepo.findById("u9c_erp").isPresent()) return;
-        DataSourceDef ds = new DataSourceDef();
-        ds.setCode("u9c_erp");
-        ds.setName("U9 Cloud ERP");
-        ds.setBaseUrl("https://erp.btbfaf.com/U9C");
-        ds.setAuthType("u9c_oauth");
-        ds.setAuthConfig("""
-                {"clientId":"bf","clientSecret":"09bd81f413f4451585b6c0b7a0269b11","entCode":"001","userCode":"af30045","orgCode":"0101","ttlSeconds":240}
-                """.trim());
-        ds.setUpdatedAt(Instant.now());
-        dataSourceRepo.save(ds);
-        log.info("Seeded default u9c_erp datasource for local environment.");
+        String clientSecret = System.getenv("U9C_CLIENT_SECRET");
+        if (clientSecret == null || clientSecret.isBlank()) {
+            log.info("Skipped seeding u9c_erp datasource: U9C_CLIENT_SECRET env is not set.");
+            return;
+        }
+        String baseUrl = envOr("U9C_BASE_URL", "https://erp.btbfaf.com/U9C");
+        String clientId = envOr("U9C_CLIENT_ID", "bf");
+        String entCode = envOr("U9C_ENT_CODE", "001");
+        String userCode = envOr("U9C_USER_CODE", "af30045");
+        String orgCode = envOr("U9C_ORG_CODE", "0101");
+        try {
+            DataSourceDef ds = new DataSourceDef();
+            ds.setCode("u9c_erp");
+            ds.setName("U9 Cloud ERP");
+            ds.setBaseUrl(baseUrl);
+            ds.setAuthType("u9c_oauth");
+            ds.setAuthConfig(mapper.writeValueAsString(java.util.Map.of(
+                    "clientId", clientId,
+                    "clientSecret", clientSecret,
+                    "entCode", entCode,
+                    "userCode", userCode,
+                    "orgCode", orgCode,
+                    "ttlSeconds", 240
+            )));
+            ds.setUpdatedAt(Instant.now());
+            dataSourceRepo.save(ds);
+            log.info("Seeded u9c_erp datasource from environment variables.");
+        } catch (Exception e) {
+            log.warn("Failed seeding u9c_erp datasource: {}", e.getMessage());
+        }
+    }
+
+    private static String envOr(String key, String def) {
+        String v = System.getenv(key);
+        return (v == null || v.isBlank()) ? def : v.trim();
     }
 
     private void ensureEndpointsAndDatasets() {

@@ -26,6 +26,13 @@ export type IconName =
   | 'bolt'
   | 'check'
   | 'config'
+  | 'sync'
+  | 'sidebar'
+  | 'menu'
+  | 'refresh'
+  | 'trend'
+  | 'alert'
+  | 'chevronRight'
 
 const paths: Record<IconName, ReactNode> = {
   home: (
@@ -144,6 +151,41 @@ const paths: Record<IconName, ReactNode> = {
       <path d="M8 2.5v2M8 11.5v2M2.5 8h2M11.5 8h2M4.1 4.1l1.4 1.4M10.5 10.5l1.4 1.4M11.9 4.1l-1.4 1.4M5.5 10.5l-1.4 1.4" />
     </>
   ),
+  sync: (
+    <>
+      <path d="M13 6A5.2 5.2 0 0 0 3.8 4.8" />
+      <path d="M3.5 2.5v2.7h2.7" />
+      <path d="M3 10a5.2 5.2 0 0 0 9.2 1.2" />
+      <path d="M12.5 13.5v-2.7H9.8" />
+    </>
+  ),
+  sidebar: (
+    <>
+      <rect x="2.2" y="2.8" width="11.6" height="10.4" rx="1.6" />
+      <path d="M6 2.8v10.4" />
+    </>
+  ),
+  menu: <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />,
+  refresh: (
+    <>
+      <path d="M13 8a5 5 0 1 1-1.3-3.4" />
+      <path d="M13 2.8v2.6h-2.6" />
+    </>
+  ),
+  trend: (
+    <>
+      <path d="M2.5 11.5 6.2 7.8l2.5 2.2 4.8-5.5" />
+      <path d="M10.5 4.5h3v3" />
+    </>
+  ),
+  alert: (
+    <>
+      <path d="M8 2.6 13.8 12.8H2.2z" />
+      <path d="M8 6.4v3.2" />
+      <path d="M8 11.3h.01" />
+    </>
+  ),
+  chevronRight: <path d="M6.2 4 10.2 8l-4 4" />,
 }
 
 export function Icon({

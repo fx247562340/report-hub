@@ -29,8 +29,11 @@ public class ReportHubProperties {
 
     public static class Security {
         private String corsAllowedOrigins = "http://localhost:5173";
+        private boolean allowRegister = false;
         public String getCorsAllowedOrigins() { return corsAllowedOrigins; }
         public void setCorsAllowedOrigins(String corsAllowedOrigins) { this.corsAllowedOrigins = corsAllowedOrigins; }
+        public boolean isAllowRegister() { return allowRegister; }
+        public void setAllowRegister(boolean allowRegister) { this.allowRegister = allowRegister; }
     }
 
     public static class Engine {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../api/client'
+import { api, getUser } from '../api/client'
 import Icon from '../components/Icon'
 import EmptyState from '../components/EmptyState'
 import { TableSkeleton } from '../components/Skeleton'
@@ -125,6 +125,7 @@ const emptyCalc = (): CalcRow => ({
 })
 
 export default function Reports() {
+  const isAdmin = getUser()?.role === 'admin'
   const [rows, setRows] = useState<Report[]>([])
   const [edit, setEdit] = useState<Report | null>(null)
   const [isNew, setIsNew] = useState(false)
@@ -148,7 +149,9 @@ export default function Reports() {
     setLoading(true)
     try {
       setRows(await api.get<Report[]>('/api/reports'))
-      try { setDatasets(await api.get<any[]>('/api/admin/datasets')) } catch { /* member */ }
+      if (isAdmin) {
+        try { setDatasets(await api.get<any[]>('/api/admin/datasets')) } catch { /* ignore */ }
+      }
     } finally {
       setLoading(false)
     }
@@ -159,6 +162,7 @@ export default function Reports() {
   }, [])
 
   function openEdit(r?: Report) {
+    if (!isAdmin) return
     setError('')
     if (r) {
       setIsNew(false)
@@ -282,10 +286,10 @@ export default function Reports() {
           <div className="icon-tile"><Icon name="report" size={22} /></div>
           <div>
             <h1>报表</h1>
-            <p>定义最终展示哪些列、如何筛选排序与计算</p>
+            <p>{isAdmin ? '定义最终展示哪些列、如何筛选排序与计算' : '选择报表进入查询与导出'}</p>
           </div>
         </div>
-        <button className="btn primary" onClick={() => openEdit()}>新建报表</button>
+        {isAdmin && <button className="btn primary" onClick={() => openEdit()}>新建报表</button>}
       </div>
 
       {error && !edit && <div className="error-banner">{error}</div>}
@@ -295,7 +299,7 @@ export default function Reports() {
           <thead>
             <tr>
               <th>报表</th>
-              <th>主数据集</th>
+              {isAdmin && <th>主数据集</th>}
               <th>展示列</th>
               <th>说明</th>
               <th>操作</th>
@@ -308,19 +312,25 @@ export default function Reports() {
                 <tr key={r.code}>
                   <td>
                     <div style={{ fontWeight: 600 }}>{r.name}</div>
-                    <div className="muted mono" style={{ fontSize: 12 }}>{r.code}</div>
+                    {isAdmin && <div className="muted mono" style={{ fontSize: 12 }}>{r.code}</div>}
                   </td>
-                  <td>{dsLabel(r.rootDataset)}</td>
+                  {isAdmin && <td>{dsLabel(r.rootDataset)}</td>}
                   <td className="muted td-clip">
                     {fs.map((f) => f.label).join('、') || '-'}
                   </td>
                   <td className="muted td-clip">{r.description || '-'}</td>
                   <td className="td-actions">
                     <div className="row">
-                      <Link className="btn sm" to={`/reports/${r.code}`}>查询</Link>
-                      <Link className="btn sm" to={`/relations?report=${r.code}`}>关联</Link>
-                      <button className="btn sm" onClick={() => openEdit(r)}>编辑</button>
-                      <button className="btn sm danger" onClick={() => remove(r.code)}>删除</button>
+                      <Link className={isAdmin ? 'btn sm' : 'btn sm primary'} to={`/reports/${r.code}`}>
+                        {isAdmin ? '查询' : '进入查询'}
+                      </Link>
+                      {isAdmin && (
+                        <>
+                          <Link className="btn sm" to={`/relations?report=${r.code}`}>关联</Link>
+                          <button className="btn sm" onClick={() => openEdit(r)}>编辑</button>
+                          <button className="btn sm danger" onClick={() => remove(r.code)}>删除</button>
+                        </>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -328,8 +338,14 @@ export default function Reports() {
             })}
           </tbody>
         </table>
-        {loading && rows.length === 0 ? <TableSkeleton rows={5} cols={5} /> : null}
-        {rows.length === 0 && !loading && <EmptyState variant="report" title="暂无报表" desc="新建报表，配置主数据集与展示列后即可查询" />}
+        {loading && rows.length === 0 ? <TableSkeleton rows={5} cols={isAdmin ? 5 : 4} /> : null}
+        {rows.length === 0 && !loading && (
+          <EmptyState
+            variant="report"
+            title="暂无报表"
+            desc={isAdmin ? '新建报表，配置主数据集与展示列后即可查询' : '请联系管理员发布可查询的报表'}
+          />
+        )}
       </div>
 
       {edit && (

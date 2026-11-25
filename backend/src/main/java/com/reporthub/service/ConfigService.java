@@ -140,19 +140,143 @@ public class ConfigService {
         }
     }
 
+    public static final String SECRET_MASK = "******";
+
     // ---- datasources ----
     public List<DataSourceDef> listDatasources() { return dataSourceRepo.findAll(); }
+
+    public List<DataSourceDef> listDatasourcesMasked() {
+        return dataSourceRepo.findAll().stream().map(this::maskDatasource).toList();
+    }
+
+    public DataSourceDef maskDatasource(DataSourceDef src) {
+        if (src == null) return null;
+        DataSourceDef copy = new DataSourceDef();
+        copy.setCode(src.getCode());
+        copy.setName(src.getName());
+        copy.setBaseUrl(src.getBaseUrl());
+        copy.setAuthType(src.getAuthType());
+        copy.setAuthConfig(maskAuthConfig(src.getAuthType(), src.getAuthConfig()));
+        copy.setEnv(src.getEnv());
+        copy.setTimeoutMs(src.getTimeoutMs());
+        copy.setUpdatedAt(src.getUpdatedAt());
+        return copy;
+    }
 
     @Transactional
     public DataSourceDef saveDatasource(DataSourceDef def) {
         requireCode(def.getCode(), "数据源");
-        def.setCode(def.getCode().trim());
+        String code = def.getCode().trim();
+        def.setCode(code);
+        DataSourceDef existing = dataSourceRepo.findById(code).orElse(null);
+        if (existing != null) {
+            def.setAuthConfig(mergeAuthSecrets(def.getAuthType(), def.getAuthConfig(),
+                    existing.getAuthType(), existing.getAuthConfig()));
+        }
         def.setUpdatedAt(Instant.now());
-        return dataSourceRepo.save(def);
+        DataSourceDef saved = dataSourceRepo.save(def);
+        sessionAuthService.invalidate(code);
+        u9cOAuth.invalidate(code);
+        resultCache.invalidateAll();
+        return saved;
     }
 
     @Transactional
-    public void deleteDatasource(String code) { dataSourceRepo.deleteById(code); }
+    public void deleteDatasource(String code) {
+        dataSourceRepo.deleteById(code);
+        sessionAuthService.invalidate(code);
+        u9cOAuth.invalidate(code);
+        resultCache.invalidateAll();
+    }
+
+    @SuppressWarnings("unchecked")
+    String maskAuthConfig(String authType, String json) {
+        if (json == null || json.isBlank()) return json;
+        try {
+            Object parsed = mapper.readValue(json, Object.class);
+            if (!(parsed instanceof Map<?, ?> raw)) return json;
+            Map<String, Object> masked = maskMap(authType, (Map<String, Object>) raw);
+            return mapper.writeValueAsString(masked);
+        } catch (Exception e) {
+            return json;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    String mergeAuthSecrets(String incomingAuthType, String incomingJson,
+                            String existingAuthType, String existingJson) {
+        if (existingJson == null || existingJson.isBlank()) return incomingJson;
+        if (incomingJson == null || incomingJson.isBlank()) return existingJson;
+        if (incomingAuthType != null && existingAuthType != null
+                && !incomingAuthType.equalsIgnoreCase(existingAuthType)) {
+            return incomingJson;
+        }
+        try {
+            Object inObj = mapper.readValue(incomingJson, Object.class);
+            Object exObj = mapper.readValue(existingJson, Object.class);
+            if (!(inObj instanceof Map<?, ?> inMap) || !(exObj instanceof Map<?, ?> exMap)) {
+                return incomingJson;
+            }
+            Map<String, Object> merged = mergeMap(incomingAuthType,
+                    (Map<String, Object>) inMap, (Map<String, Object>) exMap);
+            return mapper.writeValueAsString(merged);
+        } catch (Exception e) {
+            return incomingJson;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> maskMap(String authType, Map<String, Object> src) {
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : src.entrySet()) {
+            String k = e.getKey();
+            Object v = e.getValue();
+            if (v instanceof Map<?, ?> sub) {
+                out.put(k, maskMap(authType, (Map<String, Object>) sub));
+            } else if (v instanceof String s && !s.isBlank() && isSensitiveKey(authType, k)) {
+                out.put(k, SECRET_MASK);
+            } else {
+                out.put(k, v);
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> mergeMap(String authType, Map<String, Object> incoming, Map<String, Object> existing) {
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : incoming.entrySet()) {
+            String k = e.getKey();
+            Object inVal = e.getValue();
+            Object exVal = existing.get(k);
+            if (inVal instanceof Map<?, ?> inSub && exVal instanceof Map<?, ?> exSub) {
+                out.put(k, mergeMap(authType, (Map<String, Object>) inSub, (Map<String, Object>) exSub));
+            } else if (isSensitiveKey(authType, k)) {
+                String inStr = inVal == null ? "" : String.valueOf(inVal).trim();
+                boolean keepOld = inStr.isEmpty() || SECRET_MASK.equals(inStr);
+                if (keepOld && exVal instanceof String exStr && !exStr.isBlank()) {
+                    out.put(k, exStr);
+                } else {
+                    out.put(k, inVal);
+                }
+            } else {
+                out.put(k, inVal);
+            }
+        }
+        return out;
+    }
+
+    private static boolean isSensitiveKey(String authType, String key) {
+        if (key == null) return false;
+        String k = key.trim().toLowerCase(java.util.Locale.ROOT);
+        if (k.equals("password") || k.equals("clientsecret") || k.equals("client_secret")
+                || k.equals("secret") || k.equals("apikey") || k.equals("api_key")
+                || k.equals("salt") || k.equals("authorization") || k.equals("token")
+                || k.equals("access_token") || k.equals("accesstoken")) {
+            return true;
+        }
+        return "api_key".equalsIgnoreCase(authType) && k.equals("value");
+    }
 
     // ---- endpoints ----
     public List<ApiEndpointDef> listEndpoints() { return endpointRepo.findAll(); }
@@ -162,11 +286,16 @@ public class ConfigService {
         requireCode(def.getCode(), "接口");
         def.setCode(def.getCode().trim());
         def.setUpdatedAt(Instant.now());
-        return endpointRepo.save(def);
+        ApiEndpointDef saved = endpointRepo.save(def);
+        resultCache.invalidateAll();
+        return saved;
     }
 
     @Transactional
-    public void deleteEndpoint(String code) { endpointRepo.deleteById(code); }
+    public void deleteEndpoint(String code) {
+        endpointRepo.deleteById(code);
+        resultCache.invalidateAll();
+    }
 
     // ---- datasets + mappings ----
     public List<DatasetDef> listDatasets() { return datasetRepo.findAll(); }
@@ -192,6 +321,7 @@ public class ConfigService {
                 fieldMappingRepo.save(m);
             }
         }
+        resultCache.invalidateAll();
         return def;
     }
 
@@ -199,6 +329,7 @@ public class ConfigService {
     public void deleteDataset(String code) {
         fieldMappingRepo.deleteByDatasetCode(code);
         datasetRepo.deleteById(code);
+        resultCache.invalidateAll();
     }
 
     // ---- relations ----

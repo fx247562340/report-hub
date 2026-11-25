@@ -21,6 +21,13 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children
 }
 
+function RequireAdmin({ children }: { children: JSX.Element }) {
+  const user = getUser()
+  if (!user) return <Navigate to="/login" replace />
+  if (user.role !== 'admin') return <Navigate to="/" replace />
+  return children
+}
+
 export default function App() {
   return (
     <Routes>
@@ -36,12 +43,12 @@ export default function App() {
         <Route index element={<Home />} />
         <Route path="reports" element={<Reports />} />
         <Route path="reports/:code" element={<ReportRun />} />
-        <Route path="sync" element={<Sync />} />
-        <Route path="datasources" element={<Datasources />} />
-        <Route path="endpoints" element={<Endpoints />} />
-        <Route path="datasets" element={<Datasets />} />
-        <Route path="relations" element={<Relations />} />
-        <Route path="users" element={<Users />} />
+        <Route path="sync" element={<RequireAdmin><Sync /></RequireAdmin>} />
+        <Route path="datasources" element={<RequireAdmin><Datasources /></RequireAdmin>} />
+        <Route path="endpoints" element={<RequireAdmin><Endpoints /></RequireAdmin>} />
+        <Route path="datasets" element={<RequireAdmin><Datasets /></RequireAdmin>} />
+        <Route path="relations" element={<RequireAdmin><Relations /></RequireAdmin>} />
+        <Route path="users" element={<RequireAdmin><Users /></RequireAdmin>} />
         <Route path="profile" element={<Profile />} />
         <Route path="about" element={<About />} />
       </Route>

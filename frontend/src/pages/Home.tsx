@@ -1,500 +1,580 @@
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, getUser } from '../api/client'
-import Icon, { IconName } from '../components/Icon'
+import Icon from '../components/Icon'
 import EmptyState from '../components/EmptyState'
 import { CardSkeleton } from '../components/Skeleton'
 
-type Report = {
-  code: string
-  name: string
-  description?: string
-  rootDataset: string
-  fieldsJson?: string
-  filtersJson?: string
+type ExecKpi = {
+  key: string
+  label: string
+  value: number
+  prevValue: number | null
+  deltaPct: number | null
+  unit: string
+  kind: 'money' | 'ton'
+  positiveIsGood: boolean | null
+  sub: string
+  drillUrl: string
 }
 
-type WidgetCfg = {
-  id?: string
-  reportCode: string
-  title: string
-  metric: 'count' | 'sum' | 'avg' | 'min' | 'max' | string
-  field?: string
-  filtersJson?: string
-  unit?: string
-  timeRange?: 'today' | 'week' | 'month' | string
-  dateFilterKey?: string
-  sort?: number
-  enabled?: boolean
+type MonthlyPoint = {
+  month: string
+  label: string
+  blackIn: number
+  blackOut: number
+  whiteIn: number
+  whiteShip: number
+  invoiceAmt: number
+  paymentAmt: number
+  totalDebt: number
 }
 
-type WidgetValue = WidgetCfg & {
-  value: number | null
-  reportName?: string
-  ok?: boolean
-  error?: string
-  dateStart?: string
-  dateEnd?: string
+type TopDebtCustomer = {
+  customerName: string
+  totalDebt: number
+  invUnpaid: number
+  shipUninv: number
+  contractCount: number
+  sharePct: number
 }
 
-const METRIC_LABEL: Record<string, string> = {
-  count: '总条数',
-  count_distinct: '去重计数',
-  sum: '合计',
-  avg: '平均',
-  min: '最小',
-  max: '最大',
+type StockAlert = {
+  contractNo: string
+  customerName: string
+  productName: string
+  blackStock: number
+  whiteStock: number
 }
 
-const TIME_LABEL: Record<string, string> = {
-  today: '当天',
-  week: '本周',
-  month: '当月',
-}
-
-const METRIC_ICON: Record<string, IconName> = {
-  count: 'report',
-  count_distinct: 'users',
-  sum: 'bolt',
-  avg: 'dataset',
-  min: 'chevronDown',
-  max: 'chevronUp',
-}
-
-function countJson(json?: string) {
-  try {
-    const arr = JSON.parse(json || '[]')
-    return Array.isArray(arr) ? arr.length : 0
-  } catch {
-    return 0
+type OverviewData = {
+  queryMode: string
+  generatedAt?: string
+  syncHealth?: {
+    total: number
+    enabled: number
+    failed: number
+    running: number
+    lastSyncedAt?: string | null
+    failedDatasets?: string[]
+  }
+  executive?: {
+    error?: string
+    month: string
+    monthLabel: string
+    prevMonth?: string | null
+    availableMonths: string[]
+    contractCount: number
+    kpis: ExecKpi[]
+    monthlySeries: MonthlyPoint[]
+    topDebtCustomers: TopDebtCustomer[]
+    stockAlerts: StockAlert[]
+    stockAlertTotal: number
+    lastSyncedAt?: string | null
   }
 }
 
-function parseFilterLabels(json?: string): string[] {
-  try {
-    const arr = JSON.parse(json || '[]')
-    if (!Array.isArray(arr)) return []
-    return arr.map((x: any) => x.label || x.key).filter(Boolean).slice(0, 3)
-  } catch {
-    return []
-  }
-}
-
-function fmtValue(v: number | null | undefined, metric?: string) {
-  if (v == null) return '—'
-  if (metric === 'count') return v.toLocaleString()
-  return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2)
-}
-
-const emptyWidget = (reports: Report[]): WidgetCfg => ({
-  reportCode: reports[0]?.code || '',
-  title: '',
-  metric: 'count',
-  field: '',
-  filtersJson: '{}',
-  unit: '',
-  enabled: true,
-})
-
-export default function Home() {
-  const user = getUser()
-  const isAdmin = user?.role === 'admin'
-  const displayName = user?.displayName || user?.username || '朋友'
-  const [reports, setReports] = useState<Report[]>([])
-  const [stat, setStat] = useState({ datasources: 0, endpoints: 0, datasets: 0, relations: 0 })
-  const [widgets, setWidgets] = useState<WidgetValue[]>([])
-  const [dashLoading, setDashLoading] = useState(true)
-  const [loading, setLoading] = useState(true)
-  const [cfgOpen, setCfgOpen] = useState(false)
-  const [draft, setDraft] = useState<WidgetCfg[]>([])
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    let alive = true
-    const loadReports = async () => {
-      setLoading(true)
-      try {
-        const list = await api.get<Report[]>('/api/reports')
-        if (alive) setReports(list)
-        if (isAdmin) {
-          const [ds, ep, dset] = await Promise.all([
-            api.get<any[]>('/api/admin/datasources'),
-            api.get<any[]>('/api/admin/endpoints'),
-            api.get<any[]>('/api/admin/datasets'),
-          ])
-          let relCount = 0
-          try {
-            const relLists = await Promise.all(
-              (list || []).map((r) =>
-                api.get<any[]>(`/api/admin/reports/${r.code}/relations`).catch(() => [])
-              )
-            )
-            relCount = relLists.reduce((n, arr) => n + (arr?.length || 0), 0)
-          } catch { relCount = 0 }
-          if (alive) {
-            setStat({
-              datasources: ds.length,
-              endpoints: ep.length,
-              datasets: dset.length,
-              relations: relCount,
-            })
-          }
-        }
-      } catch {
-        if (alive) setReports([])
-      } finally {
-        if (alive) setLoading(false)
-      }
-    }
-    const loadDash = async () => {
-      setDashLoading(true)
-      try {
-        for (let i = 0; i < 36; i++) {
-          const dash = await api.get<WidgetValue[]>('/api/dashboard')
-          if (!alive) return
-          setWidgets(dash || [])
-          if (!(dash || []).some((w: any) => w.value == null && w.ok !== false)) break
-          await new Promise((r) => setTimeout(r, i < 5 ? 1000 : 2500))
-        }
-      } catch {
-        if (alive) setWidgets([])
-      } finally {
-        if (alive) setDashLoading(false)
-      }
-    }
-    loadReports()
-    loadDash()
-    return () => { alive = false }
-  }, [isAdmin])
-
-  const hour = new Date().getHours()
-  const greet = hour < 6 ? '夜深了' : hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好'
-
-  async function openCfg() {
-    setError('')
-    let list: WidgetCfg[] = []
-    try {
-      list = await api.get<WidgetCfg[]>('/api/admin/dashboard/widgets')
-    } catch {
-      list = []
-    }
-    // 固定 4 格
-    const slots: WidgetCfg[] = [0, 1, 2, 3].map((i) => {
-      const w = list[i]
+function fmtSmartKpi(v: number, kind: 'money' | 'ton'): { main: string; unit: string; exact: string } {
+  if (kind === 'money') {
+    const exact = `${v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 元`
+    if (Math.abs(v) >= 10000) {
       return {
-        id: w?.id,
-        reportCode: w?.reportCode || reports[0]?.code || '',
-        title: w?.title || '',
-        metric: w?.metric || 'count',
-        field: w?.field || '',
-        filtersJson: w?.filtersJson || '{}',
-        unit: w?.unit || '',
-        timeRange: w?.timeRange || 'month',
-        dateFilterKey: w?.dateFilterKey || '',
-        sort: i,
-        enabled: true,
+        main: (v / 10000).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        unit: '万元',
+        exact,
       }
-    })
-    setDraft(slots)
-    setCfgOpen(true)
-  }
-
-  async function saveWidgets() {
-    try {
-      const payload = [0, 1, 2, 3].map((i) => {
-        const w = draft[i] || emptyWidget(reports)
-        return {
-          ...w,
-          id: w.id,
-          title: w.title || `指标 ${i + 1}`,
-          reportCode: w.reportCode || reports[0]?.code || '',
-          metric: w.metric || 'count',
-          filtersJson: w.filtersJson || '{}',
-          timeRange: w.timeRange || 'month',
-          dateFilterKey: w.dateFilterKey || '',
-          sort: i,
-          enabled: true,
-        }
-      })
-      await api.post('/api/admin/dashboard/widgets', payload)
-      const dash = await api.get<WidgetValue[]>('/api/dashboard')
-      setWidgets(dash || [])
-      setCfgOpen(false)
-    } catch (e: any) {
-      setError(e.message)
+    }
+    return {
+      main: v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      unit: '元',
+      exact,
     }
   }
+  return {
+    main: v.toLocaleString('zh-CN', { maximumFractionDigits: 2 }),
+    unit: '吨',
+    exact: `${v.toLocaleString('zh-CN', { maximumFractionDigits: 4 })} 吨`,
+  }
+}
+
+function fmtWanShort(v: number) {
+  if (Math.abs(v) >= 10000) {
+    return `${(v / 10000).toLocaleString('zh-CN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}万`
+  }
+  return v.toLocaleString('zh-CN', { maximumFractionDigits: 0 })
+}
+
+function fmtSyncTime(iso?: string | null) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function MonthlyTrendChart({
+  series,
+  activeMonth,
+  mode,
+  onSelectMonth,
+}: {
+  series: MonthlyPoint[]
+  activeMonth: string
+  mode: 'finance' | 'tonnage'
+  onSelectMonth: (m: string) => void
+}) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null)
+
+  const keys = mode === 'finance'
+    ? [
+        { key: 'invoiceAmt' as const, label: '开票金额', color: '#5dff7a' },
+        { key: 'paymentAmt' as const, label: '回款金额', color: '#38bdf8' },
+      ]
+    : [
+        { key: 'blackIn' as const, label: '黑件来料', color: '#94a3b8' },
+        { key: 'whiteIn' as const, label: '白件入库', color: '#5dff7a' },
+        { key: 'whiteShip' as const, label: '白件发货', color: '#fbbf24' },
+      ]
+
+  const maxVal = useMemo(() => {
+    let m = 0
+    for (const pt of series) {
+      for (const k of keys) {
+        const v = Number(pt[k.key] || 0)
+        if (v > m) m = v
+      }
+    }
+    return m > 0 ? m * 1.15 : 100
+  }, [series, mode])
+
+  if (!series.length) {
+    return <EmptyState compact variant="data" title="暂无月度趋势数据" desc="完成 U9 同步后将自动呈现近 6 个月趋势" />
+  }
+
+  const W = 560
+  const H = 236
+  const padL = 56
+  const padR = 16
+  const padT = 16
+  const padB = 34
+  const chartW = W - padL - padR
+  const chartH = H - padT - padB
+  const slotW = chartW / Math.max(series.length, 1)
+  const barGroupW = Math.min(slotW * 0.62, keys.length * 26)
+  const barGap = 5
+  const barW = Math.max(10, (barGroupW - barGap * (keys.length - 1)) / keys.length)
+
+  const ticks = [0, 0.25, 0.5, 0.75, 1]
+  const activePoint = hoverIdx != null
+    ? series[hoverIdx]
+    : (series.find((p) => p.month === activeMonth) || series[series.length - 1])
 
   return (
-    <>
-      <div className="page-head home-hero">
-        <div className="row" style={{ gap: 14 }}>
-          <div className="icon-tile"><Icon name="home" size={22} /></div>
-          <div>
-            <h1>{greet}，{displayName}</h1>
-            <p>关键指标与可用报表，数据实时来自上游系统</p>
-          </div>
-        </div>
-        <div className="row">
-          <Link className="btn" to="/about"><Icon name="help" size={14} />使用说明</Link>
-          {isAdmin && (
-            <>
-              <button className="btn" onClick={openCfg}><Icon name="config" size={14} />配置看板</button>
-              <Link className="btn primary" to="/reports"><Icon name="report" size={15} />管理报表</Link>
-            </>
-          )}
-        </div>
+    <div className="dash-chart-wrap">
+      <div className="dash-chart-legend">
+        {keys.map((k) => (
+          <span key={k.key} className="legend-item">
+            <i style={{ background: k.color }} />
+            {k.label}
+          </span>
+        ))}
+        <span className="legend-tip">悬浮查看明细 · 点击柱体切换月份</span>
       </div>
 
-      {/* 数据看板 · 固定 4 格 */}
-      <div className="section-head">
-        <div>
-          <h2>数据看板</h2>
-          <p className="muted">固定 4 个指标，管理员可改统计口径</p>
-        </div>
-        {isAdmin && (
-          <button className="btn sm" onClick={openCfg}><Icon name="config" size={12} />配置指标</button>
-        )}
-      </div>
-      {(() => {
-        const slots = [0, 1, 2, 3].map((i) => widgets[i] || null)
-        return (
-          <div className="metrics metrics-4">
-            {slots.map((w, i) =>
-              w ? (
-                <div className="card metric" key={w.id || i}>
-                  <div className="label">
-                    <span>{w.title || `指标 ${i + 1}`}</span>
-                    <span className="badge muted">{TIME_LABEL[w.timeRange || 'month'] || w.timeRange}</span>
-                  </div>
-                  <div className="value">
-                    {w.value != null
-                      ? fmtValue(w.value, w.metric)
-                      : (w.ok === false ? '—' : '计算中…')}
-                    {w.value != null && w.unit ? <span style={{ fontSize: 14, marginLeft: 4 }}>{w.unit}</span> : null}
-                  </div>
-                  <div className="hint">
-                    {w.dateStart ? `${w.dateStart} ~ ${w.dateEnd}` : ''}
-                    {w.dateStart ? ' · ' : ''}
-                    {METRIC_LABEL[w.metric] || w.metric}
-                    {w.field ? ` · ${w.field}` : ''}
-                  </div>
-                </div>
-              ) : (
-                <div className="card metric" key={i}>
-                  <div className="label"><span>指标 {i + 1}</span><Icon name="bolt" size={15} /></div>
-                  <div className="value">—</div>
-                  <div className="hint">未配置</div>
-                </div>
-              )
-            )}
-          </div>
-        )
-      })()}
-
-      {/* 配置能力（仅管理员） */}
-      {isAdmin && (
-        <div className="metrics" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginTop: 4 }}>
-          {loading ? (
-            <CardSkeleton count={4} />
-          ) : ([
-            { to: '/datasources', label: '数据源', icon: 'datasource' as const, value: stat.datasources },
-            { to: '/endpoints', label: '接口', icon: 'api' as const, value: stat.endpoints },
-            { to: '/datasets', label: '数据集', icon: 'dataset' as const, value: stat.datasets },
-            { to: '/relations', label: '关联', icon: 'relation' as const, value: stat.relations },
-          ]).map((c) => (
-            <Link key={c.to} to={c.to} className="card metric clickable">
-              <div className="label"><span>{c.label}</span><Icon name={c.icon} size={15} /></div>
-              <div className="value">{c.value}</div>
-              <div className="hint">点击进入配置</div>
-            </Link>
-          ))}
-        </div>
-      )}
-
-      <div className="section-head" style={{ marginTop: 8 }}>
-        <div>
-          <h2>可用报表</h2>
-          <p className="muted">点卡片进入查询</p>
-        </div>
-        <span className="badge ok">{reports.length} 张</span>
-      </div>
-
-      {loading ? (
-        <div className="report-grid">
-          {[0, 1, 2].map((i) => <div className="report-card skel-card" key={i} />)}
-        </div>
-      ) : reports.length === 0 ? (
-        <EmptyState
-          variant="report"
-          title="暂无可查询的报表"
-          desc={isAdmin ? '在「报表」里配置后，这里会出现卡片' : '请联系管理员发布报表'}
-          action={isAdmin ? <Link className="btn primary sm" to="/reports">去配置报表</Link> : undefined}
-        />
-      ) : (
-        <div className="report-grid">
-          {reports.map((r, idx) => {
-            const fieldCount = countJson(r.fieldsJson)
-            const filterLabels = parseFilterLabels(r.filtersJson)
+      {activePoint && (
+        <div className="dash-chart-readout">
+          <span className="readout-month">{activePoint.month}</span>
+          {keys.map((k) => {
+            const raw = Number(activePoint[k.key] || 0)
             return (
-              <Link
-                to={`/reports/${r.code}`}
-                key={r.code}
-                className="report-card"
-                style={{ animationDelay: `${idx * 0.05}s` }}
-              >
-                <div className="report-card-top">
-                  <div className="report-card-icon"><Icon name="report" size={20} /></div>
-                  <div className="report-card-arrow"><Icon name="arrowLeft" size={14} className="flip-x" /></div>
-                </div>
-                <h3>{r.name}</h3>
-                <p className="report-card-desc">{r.description || `主数据集 ${r.rootDataset}`}</p>
-                <div className="report-card-meta">
-                  <span><Icon name="dataset" size={12} />{fieldCount || '—'} 列</span>
-                  <span><Icon name="search" size={12} />{filterLabels.length || '无'} 筛选</span>
-                </div>
-                {filterLabels.length > 0 && (
-                  <div className="report-card-tags">
-                    {filterLabels.map((t) => <span key={t} className="badge muted">{t}</span>)}
-                  </div>
-                )}
-                <div className="report-card-cta">
-                  <span className="btn primary sm">进入查询</span>
-                </div>
-              </Link>
+              <span className="readout-item" key={k.key}>
+                <i style={{ background: k.color }} />
+                <span>{k.label}</span>
+                <b>
+                  {mode === 'finance'
+                    ? `${raw.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 元`
+                    : `${raw.toLocaleString('zh-CN', { maximumFractionDigits: 2 })} 吨`}
+                </b>
+              </span>
             )
           })}
         </div>
       )}
 
-      {cfgOpen && (
-        <div className="modal-backdrop" onClick={() => setCfgOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h3>配置数据看板</h3>
-                <p className="sub">每张卡片 = 一条指标，可挂默认筛选</p>
-              </div>
-              <button className="btn sm ghost" onClick={() => setCfgOpen(false)}>关闭</button>
-            </div>
-            <div className="modal-body">
-              {error && <div className="error-banner">{error}</div>}
-              <div className="sec-title">
-                <b>指标卡片</b>
-                <span>固定 4 个，只改内容，不可增减</span>
-              </div>
-              {[0, 1, 2, 3].map((idx) => {
-                const w = draft[idx] || emptyWidget(reports)
-                return (
-                  <div key={idx} className="form-section">
-                    <div className="sec-title" style={{ marginBottom: 10 }}>
-                      <b>指标 {idx + 1}</b>
-                    </div>
-                    <div className="form-grid">
-                      <div className="field">
-                        <label>标题</label>
-                        <input
-                          className="input"
-                          placeholder="如 挂次总条数"
-                          value={w.title}
-                          onChange={(e) => setDraft(draft.map((x, i) => (i === idx ? { ...x, title: e.target.value } : x)))}
-                        />
-                      </div>
-                      <div className="field">
-                        <label>报表</label>
-                        <select
-                          className="select"
-                          value={w.reportCode}
-                          onChange={(e) => setDraft(draft.map((x, i) => (i === idx ? { ...x, reportCode: e.target.value } : x)))}
-                        >
-                          {reports.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                    <div className="form-grid">
-                      <div className="field">
-                        <label>统计方式</label>
-                        <select
-                          className="select"
-                          value={w.metric}
-                          onChange={(e) => setDraft(draft.map((x, i) => (i === idx ? { ...x, metric: e.target.value } : x)))}
-                        >
-                          {Object.entries(METRIC_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                        </select>
-                      </div>
-                      <div className="field">
-                        <label>字段 {w.metric === 'count' ? '（总条数可不填）' : '（去重/合计用列标识）'}</label>
-                        <input
-                          className="input mono"
-                          placeholder={
-                            w.metric === 'count_distinct'
-                              ? '如 customer_name / contract_no / so_no'
-                              : '如 order_weight'
-                          }
-                          value={w.field || ''}
-                          disabled={w.metric === 'count'}
-                          onChange={(e) => setDraft(draft.map((x, i) => (i === idx ? { ...x, field: e.target.value } : x)))}
-                        />
-                        {w.metric === 'count_distinct' && (
-                          <span className="hint">按字段去重后计数：客户数、合同数、销售订单数…</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="form-grid">
-                      <div className="field">
-                        <label>统计时间</label>
-                        <select
-                          className="select"
-                          value={w.timeRange || 'month'}
-                          onChange={(e) => setDraft(draft.map((x, i) => (i === idx ? { ...x, timeRange: e.target.value } : x)))}
-                        >
-                          <option value="today">当天</option>
-                          <option value="week">本周</option>
-                          <option value="month">当月</option>
-                        </select>
-                        <span className="hint">最长一个月，减小查询量</span>
-                      </div>
-                      <div className="field">
-                        <label>时间绑定筛选名</label>
-                        <input
-                          className="input mono"
-                          placeholder="endImmersionTime（可空，自动识别）"
-                          value={w.dateFilterKey || ''}
-                          onChange={(e) => setDraft(draft.map((x, i) => (i === idx ? { ...x, dateFilterKey: e.target.value } : x)))}
-                        />
-                        <span className="hint">日期范围下推到接口的参数名</span>
-                      </div>
-                    </div>
-                    <div className="form-grid">
-                      <div className="field">
-                        <label>单位</label>
-                        <input
-                          className="input"
-                          placeholder="如 行 / kg"
-                          value={w.unit || ''}
-                          onChange={(e) => setDraft(draft.map((x, i) => (i === idx ? { ...x, unit: e.target.value } : x)))}
-                        />
-                      </div>
-                      <div className="field">
-                        <label>其他筛选 JSON</label>
-                        <input
-                          className="input mono"
-                          placeholder='{"work_status":"12"}'
-                          value={w.filtersJson || '{}'}
-                          onChange={(e) => setDraft(draft.map((x, i) => (i === idx ? { ...x, filtersJson: e.target.value } : x)))}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={() => setCfgOpen(false)}>取消</button>
-              <button className="btn primary" onClick={saveWidgets}>保存看板</button>
-            </div>
+      <div className="dash-chart-stage">
+        <svg viewBox={`0 0 ${W} ${H}`} className="dash-svg" role="img" aria-label="月度经营趋势图">
+          {ticks.map((t) => {
+            const y = padT + chartH * (1 - t)
+            const val = maxVal * t
+            return (
+              <g key={t}>
+                <line x1={padL} y1={y} x2={W - padR} y2={y} className="chart-grid" />
+                <text x={padL - 8} y={y + 4} textAnchor="end" className="chart-axis-text">
+                  {mode === 'finance' ? fmtWanShort(val) : Math.round(val).toLocaleString('zh-CN')}
+                </text>
+              </g>
+            )
+          })}
+
+          {series.map((pt, idx) => {
+            const cx = padL + slotW * idx + slotW / 2
+            const startX = cx - barGroupW / 2
+            const isActive = pt.month === activeMonth
+            const isHover = hoverIdx === idx
+            return (
+              <g
+                key={pt.month}
+                className="chart-col"
+                onMouseEnter={() => setHoverIdx(idx)}
+                onMouseLeave={() => setHoverIdx(null)}
+                onClick={() => onSelectMonth(pt.month)}
+              >
+                <rect
+                  x={padL + slotW * idx + 4}
+                  y={padT - 4}
+                  width={Math.max(20, slotW - 8)}
+                  height={chartH + 28}
+                  rx={8}
+                  className={`chart-slot-bg${isActive ? ' active' : ''}${isHover ? ' hover' : ''}`}
+                />
+                {keys.map((k, ki) => {
+                  const val = Math.max(0, Number(pt[k.key] || 0))
+                  const h = Math.max(val > 0 ? 3 : 0, (val / maxVal) * chartH)
+                  const x = startX + ki * (barW + barGap)
+                  const y = padT + chartH - h
+                  return (
+                    <rect
+                      key={k.key}
+                      x={x}
+                      y={y}
+                      width={barW}
+                      height={h}
+                      rx={4}
+                      fill={k.color}
+                      opacity={isActive || isHover ? 1 : 0.72}
+                    />
+                  )
+                })}
+                <text
+                  x={cx}
+                  y={H - 12}
+                  textAnchor="middle"
+                  className={`chart-x-text${isActive ? ' active' : ''}`}
+                >
+                  {pt.month.slice(2)}
+                </text>
+              </g>
+            )
+          })}
+        </svg>
+      </div>
+    </div>
+  )
+}
+
+export default function Home() {
+  const user = getUser()
+  const navigate = useNavigate()
+  const isAdmin = user?.role === 'admin'
+  const displayName = user?.displayName || user?.username || '朋友'
+
+  const [overview, setOverview] = useState<OverviewData | null>(null)
+  const [selectedMonth, setSelectedMonth] = useState<string>('')
+  const [overviewLoading, setOverviewLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState('')
+
+  const [chartMode, setChartMode] = useState<'finance' | 'tonnage'>('finance')
+  const [focusTab, setFocusTab] = useState<'debt' | 'alerts'>('debt')
+
+  const loadOverview = useCallback(async (month?: string, force = false) => {
+    if (force) setRefreshing(true)
+    else setOverviewLoading(true)
+    setError('')
+    try {
+      const qs = new URLSearchParams()
+      if (month) qs.set('month', month)
+      if (force) qs.set('refresh', 'true')
+      const q = qs.toString() ? `?${qs.toString()}` : ''
+      const data = await api.get<OverviewData>(`/api/dashboard/overview${q}`)
+      setOverview(data)
+      if (data?.executive?.month && !month) {
+        setSelectedMonth(data.executive.month)
+      }
+    } catch (e: any) {
+      setError(e?.message || '经营看板加载失败')
+    } finally {
+      setOverviewLoading(false)
+      setRefreshing(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadOverview()
+  }, [loadOverview])
+
+  async function onChangeMonth(m: string) {
+    setSelectedMonth(m)
+    await loadOverview(m, false)
+  }
+
+  const hour = new Date().getHours()
+  const greet = hour < 6 ? '夜深了' : hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好'
+
+  const exec = overview?.executive
+  const syncHealth = overview?.syncHealth
+  const activeMonth = selectedMonth || exec?.month || ''
+  const maxCustDebt = useMemo(
+    () => Math.max(1, ...(exec?.topDebtCustomers || []).map((c) => c.totalDebt || 0)),
+    [exec?.topDebtCustomers]
+  )
+
+  return (
+    <>
+      <div className="dash-head">
+        <div className="dash-head-left">
+          <h1>{greet}，{displayName}</h1>
+          <div className="dash-status-strip">
+            <span className="status-dot ok" />
+            <span>{overview?.queryMode === 'realtime' ? '实时聚合模式' : '本地同步库'}</span>
+            {syncHealth?.lastSyncedAt && (
+              <>
+                <span className="muted">·</span>
+                <span>最近同步 {fmtSyncTime(syncHealth.lastSyncedAt)}</span>
+              </>
+            )}
+            {exec?.contractCount != null && (
+              <>
+                <span className="muted">·</span>
+                <span>在管合同行 {exec.contractCount} 条</span>
+              </>
+            )}
+            {isAdmin && (syncHealth?.failed || 0) > 0 && (
+              <Link to="/sync" className="dash-alert-pill">
+                <Icon name="alert" size={12} />
+                {syncHealth!.failed} 项同步失败
+              </Link>
+            )}
           </div>
         </div>
+
+        <div className="dash-head-actions">
+          {(exec?.availableMonths?.length || 0) > 0 && (
+            <select
+              className="select dash-month-select"
+              aria-label="选择经营统计月份"
+              value={activeMonth}
+              onChange={(e) => onChangeMonth(e.target.value)}
+            >
+              {exec!.availableMonths.map((m) => (
+                <option key={m} value={m}>{m} 月经营</option>
+              ))}
+            </select>
+          )}
+          <button
+            type="button"
+            className="btn sm"
+            disabled={refreshing}
+            onClick={() => loadOverview(selectedMonth || undefined, true)}
+            title="强制重新计算最新经营指标"
+          >
+            <Icon name="refresh" size={13} className={refreshing ? 'spin' : ''} />
+            {refreshing ? '刷新中…' : '刷新'}
+          </button>
+          <Link
+            to={activeMonth ? `/reports/rpt_contract_scroll?month=${encodeURIComponent(activeMonth)}` : '/reports/rpt_contract_scroll'}
+            className="btn sm primary"
+          >
+            <Icon name="report" size={13} />滚动明细表
+          </Link>
+        </div>
+      </div>
+
+      {error && <div className="error-banner">{error}</div>}
+
+      {overviewLoading && !exec ? (
+        <div className="dash-kpi-grid">
+          <CardSkeleton count={5} />
+        </div>
+      ) : exec?.error ? (
+        <EmptyState
+          variant="data"
+          title="经营看板暂不可用"
+          desc={exec.error}
+          action={isAdmin ? <Link className="btn primary sm" to="/sync">前往数据同步</Link> : undefined}
+        />
+      ) : exec && exec.kpis?.length > 0 ? (
+        <>
+          <section className="dash-kpi-grid" aria-label="核心经营指标">
+            {exec.kpis.map((k) => {
+              const f = fmtSmartKpi(k.value, k.kind)
+              const hasDelta = k.deltaPct != null
+              const isUp = (k.deltaPct || 0) > 0
+              const deltaTone = !hasDelta || k.positiveIsGood == null || k.deltaPct === 0
+                ? 'neutral'
+                : (isUp === k.positiveIsGood ? 'good' : 'bad')
+              return (
+                <Link
+                  key={k.key}
+                  to={k.drillUrl}
+                  className="dash-kpi-card"
+                  title={`点击进入明细报表 · 精确值：${f.exact}`}
+                >
+                  <div className="dash-kpi-top">
+                    <span className="dash-kpi-label">{k.label}</span>
+                    {hasDelta ? (
+                      <span className={`delta-pill ${deltaTone}`}>
+                        {k.deltaPct! > 0 ? '+' : ''}{k.deltaPct!.toFixed(1)}%
+                      </span>
+                    ) : (
+                      <Icon name="chevronRight" size={13} className="dash-kpi-arrow" />
+                    )}
+                  </div>
+                  <div className="dash-kpi-val">
+                    <b>{f.main}</b>
+                    <span>{f.unit}</span>
+                  </div>
+                  <div className="dash-kpi-foot">
+                    <span className="dash-kpi-sub" title={k.sub}>{k.sub}</span>
+                  </div>
+                </Link>
+              )
+            })}
+          </section>
+
+          <section className="dash-bento">
+            <div className="card dash-panel">
+              <div className="dash-panel-head">
+                <div>
+                  <h3>月度经营走势</h3>
+                  <p className="sub">当前高亮 {activeMonth}，点击月份柱体联动全页数据</p>
+                </div>
+                <div className="seg" role="group" aria-label="图表指标切换">
+                  <button
+                    type="button"
+                    className={`seg-item${chartMode === 'finance' ? ' active' : ''}`}
+                    onClick={() => setChartMode('finance')}
+                  >
+                    资金回笼
+                  </button>
+                  <button
+                    type="button"
+                    className={`seg-item${chartMode === 'tonnage' ? ' active' : ''}`}
+                    onClick={() => setChartMode('tonnage')}
+                  >
+                    产销吨位
+                  </button>
+                </div>
+              </div>
+              <MonthlyTrendChart
+                series={exec.monthlySeries || []}
+                activeMonth={activeMonth}
+                mode={chartMode}
+                onSelectMonth={onChangeMonth}
+              />
+            </div>
+
+            <div className="card dash-panel">
+              <div className="dash-panel-head">
+                <div className="tabs">
+                  <button
+                    type="button"
+                    className={focusTab === 'debt' ? 'active' : ''}
+                    onClick={() => setFocusTab('debt')}
+                  >
+                    客户欠款 Top
+                  </button>
+                  <button
+                    type="button"
+                    className={focusTab === 'alerts' ? 'active' : ''}
+                    onClick={() => setFocusTab('alerts')}
+                  >
+                    负库存预警
+                    {(exec.stockAlertTotal || 0) > 0 && (
+                      <span className="tab-count">{exec.stockAlertTotal}</span>
+                    )}
+                  </button>
+                </div>
+                <Link to={`/reports/rpt_contract_scroll?month=${encodeURIComponent(activeMonth)}`} className="btn sm ghost">
+                  全部明细
+                </Link>
+              </div>
+
+              {focusTab === 'debt' ? (
+                (exec.topDebtCustomers?.length || 0) === 0 ? (
+                  <EmptyState compact variant="data" title="当月无应收欠款客户" />
+                ) : (
+                  <div className="dash-rank-list">
+                    {exec.topDebtCustomers.map((c, idx) => {
+                      const pct = Math.max(4, Math.min(100, (c.totalDebt / maxCustDebt) * 100))
+                      const drill = `/reports/rpt_contract_scroll?month=${encodeURIComponent(activeMonth)}&customer=${encodeURIComponent(c.customerName)}`
+                      return (
+                        <button
+                          type="button"
+                          key={c.customerName}
+                          className="dash-rank-item"
+                          onClick={() => navigate(drill)}
+                          title={`点击查看「${c.customerName}」合同明细`}
+                        >
+                          <div className="dash-rank-top">
+                            <span className="dash-rank-name">
+                              <i className="rank-num">{idx + 1}</i>
+                              <span>{c.customerName}</span>
+                              {c.contractCount > 0 && <em className="rank-meta">{c.contractCount} 合同</em>}
+                            </span>
+                            <b className="dash-rank-val">
+                              {c.totalDebt >= 10000
+                                ? `${(c.totalDebt / 10000).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 万`
+                                : `${c.totalDebt.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 元`}
+                            </b>
+                          </div>
+                          <div className="dash-bar-track">
+                            <div className="dash-bar-fill" style={{ width: `${pct}%` }} />
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              ) : (exec.stockAlerts?.length || 0) === 0 ? (
+                <EmptyState compact variant="data" title="暂无负库存异常" desc="当前月份所有合同黑白件结存均为非负" />
+              ) : (
+                <div className="dash-rank-list">
+                  {exec.stockAlerts.map((a, idx) => {
+                    const qs = new URLSearchParams({ month: activeMonth })
+                    if (a.contractNo) qs.set('contractNo', a.contractNo)
+                    else if (a.customerName) qs.set('customer', a.customerName)
+                    return (
+                      <button
+                        type="button"
+                        key={`${a.contractNo}-${a.customerName}-${idx}`}
+                        className="dash-rank-item"
+                        onClick={() => navigate(`/reports/rpt_contract_scroll?${qs.toString()}`)}
+                      >
+                        <div className="dash-rank-top">
+                          <span className="dash-rank-name">
+                            <span className="mono">{a.contractNo || '无合同号'}</span>
+                            <em className="rank-meta">{a.customerName}</em>
+                          </span>
+                          <span className="row" style={{ gap: 6 }}>
+                            {a.blackStock < -0.001 && (
+                              <span className="badge err">黑 {a.blackStock}t</span>
+                            )}
+                            {a.whiteStock < -0.001 && (
+                              <span className="badge err">白 {a.whiteStock}t</span>
+                            )}
+                          </span>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </section>
+        </>
+      ) : (
+        <EmptyState variant="data" title="暂无经营数据" desc="请先同步 U9 业务数据后刷新" />
       )}
     </>
   )

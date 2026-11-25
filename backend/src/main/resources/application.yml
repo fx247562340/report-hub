@@ -31,6 +31,8 @@ reporthub:
   security:
     # API 经 Nginx 同源反代；默认放行任意来源，可用 CORS_ORIGINS 收紧
     cors-allowed-origins: ${CORS_ORIGINS:*}
+    # 默认关闭自助注册，账号由管理员在「用户管理」创建
+    allow-register: ${ALLOW_REGISTER:false}
   engine:
     lookup-concurrency: 8
     max-keys-per-batch: 200

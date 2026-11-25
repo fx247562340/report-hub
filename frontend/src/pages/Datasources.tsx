@@ -430,6 +430,7 @@ export default function Datasources() {
                       <input
                         className="input"
                         type="password"
+                        placeholder={!isNew ? '留空或保持 ****** 不修改' : ''}
                         value={authDraft.password || ''}
                         onChange={(e) => setAuthDraft({ ...authDraft, password: e.target.value })}
                       />
@@ -442,6 +443,8 @@ export default function Datasources() {
                     <label>Token</label>
                     <input
                       className="input"
+                      type="password"
+                      placeholder={!isNew ? '留空或保持 ****** 不修改' : ''}
                       value={authDraft.token || ''}
                       onChange={(e) => setAuthDraft({ ...authDraft, token: e.target.value })}
                     />
@@ -462,6 +465,8 @@ export default function Datasources() {
                       <label>密钥值</label>
                       <input
                         className="input"
+                        type="password"
+                        placeholder={!isNew ? '留空或保持 ****** 不修改' : ''}
                         value={authDraft.value || ''}
                         onChange={(e) => setAuthDraft({ ...authDraft, value: e.target.value })}
                       />
@@ -487,11 +492,11 @@ export default function Datasources() {
                         <input
                           className="input mono"
                           type="password"
-                          placeholder="clientsecret"
+                          placeholder={!isNew ? '已保存，留空或保持 ****** 不修改' : 'clientsecret'}
                           value={authDraft.clientSecret || ''}
                           onChange={(e) => setAuthDraft({ ...authDraft, clientSecret: e.target.value })}
                         />
-                        <span className="hint">OAuth2/AuthLogin 的 clientsecret</span>
+                        <span className="hint">{!isNew ? '服务端已脱敏，未改动时自动沿用原密钥' : 'OAuth2/AuthLogin 的 clientsecret'}</span>
                       </div>
                     </div>
                     <div className="form-grid">
@@ -616,6 +621,7 @@ export default function Datasources() {
                             className="input"
                             style={{ flex: 1 }}
                             type="password"
+                            placeholder={!isNew ? '留空或保持 ****** 不修改' : ''}
                             value={sess.password}
                             onChange={(e) => setSess({ ...sess, password: e.target.value })}
                           />

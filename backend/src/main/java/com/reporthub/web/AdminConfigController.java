@@ -19,12 +19,12 @@ public class AdminConfigController {
 
     @GetMapping("/datasources")
     public ApiResponse<List<DataSourceDef>> listDs() {
-        return ApiResponse.ok(configService.listDatasources());
+        return ApiResponse.ok(configService.listDatasourcesMasked());
     }
 
     @PostMapping("/datasources")
     public ApiResponse<DataSourceDef> saveDs(@RequestBody DataSourceDef def) {
-        return ApiResponse.ok(configService.saveDatasource(def));
+        return ApiResponse.ok(configService.maskDatasource(configService.saveDatasource(def)));
     }
 
     @DeleteMapping("/datasources/{code}")

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import Icon from '../components/Icon'
 import EmptyState from '../components/EmptyState'
@@ -51,8 +51,9 @@ export default function Sync() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [msg, setMsg] = useState('')
+  const aliveRef = useRef(true)
 
-  async function load() {
+  async function load(): Promise<SyncStatus[]> {
     setLoading(true)
     setError('')
     try {
@@ -61,18 +62,25 @@ export default function Sync() {
         api.get<SyncJob[]>('/api/sync/jobs'),
         api.get<any>('/api/settings/query-mode'),
       ])
-      setList(s || [])
-      setJobs(j || [])
-      setMode(m?.queryMode || 'local')
+      const fresh = s || []
+      if (aliveRef.current) {
+        setList(fresh)
+        setJobs(j || [])
+        setMode(m?.queryMode || 'local')
+      }
+      return fresh
     } catch (e: any) {
-      setError(e.message)
+      if (aliveRef.current) setError(e.message)
+      return []
     } finally {
-      setLoading(false)
+      if (aliveRef.current) setLoading(false)
     }
   }
 
   useEffect(() => {
+    aliveRef.current = true
     load()
+    return () => { aliveRef.current = false }
   }, [])
 
   async function runAll(strategy: 'incremental' | 'full') {
@@ -84,17 +92,20 @@ export default function Sync() {
       setMsg(strategy === 'full' ? '已开始全量同步（按顺序执行），请稍候…' : '已开始增量同步（按顺序执行），请稍候…')
       for (let i = 0; i < 60; i++) {
         await new Promise((r) => setTimeout(r, 3000))
-        await load()
-        const running = list.some((x) => x.lastJobStatus === 'running')
-        if (!running && i > 2) {
-          setMsg(strategy === 'full' ? '全量同步已完成（各表请看最近任务状态）' : '增量同步已完成（各表请看最近任务状态）')
+        if (!aliveRef.current) return
+        const fresh = await load()
+        const active = fresh.some((x) => x.lastJobStatus === 'running' || x.lastJobStatus === 'queued')
+        if (!active) {
+          if (aliveRef.current) {
+            setMsg(strategy === 'full' ? '全量同步已完成（各表请看最近任务状态）' : '增量同步已完成（各表请看最近任务状态）')
+          }
           break
         }
       }
     } catch (e: any) {
-      setError(e.message)
+      if (aliveRef.current) setError(e.message)
     } finally {
-      setBusy('')
+      if (aliveRef.current) setBusy('')
     }
   }
 
@@ -105,20 +116,22 @@ export default function Sync() {
     try {
       await api.post(`/api/sync/${code}/run`, { strategy })
       setMsg(`已触发${strategy === 'full' ? '全量' : '增量'}同步 ${code}，完成后自动刷新`)
-      // 轮询几次
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 40; i++) {
         await new Promise((r) => setTimeout(r, 1500))
-        await load()
-        const cur = list.find((x) => x.datasetCode === code) || (await api.get<SyncStatus[]>('/api/sync/status')).find((x: any) => x.datasetCode === code)
+        if (!aliveRef.current) return
+        const fresh = await load()
+        const cur = fresh.find((x) => x.datasetCode === code)
         if (cur && cur.lastJobStatus && cur.lastJobStatus !== 'running' && cur.lastJobStatus !== 'queued') {
-          setMsg(`${code} 同步${cur.lastJobStatus === 'success' ? '完成' : '失败'}：${cur.lastJobRows ?? 0} 行`)
+          if (aliveRef.current) {
+            setMsg(`${code} 同步${cur.lastJobStatus === 'success' ? '完成' : cur.lastJobStatus === 'cancelled' ? '已取消' : '失败'}：${cur.lastJobRows ?? 0} 行`)
+          }
           break
         }
       }
     } catch (e: any) {
-      setError(e.message)
+      if (aliveRef.current) setError(e.message)
     } finally {
-      setBusy('')
+      if (aliveRef.current) setBusy('')
     }
   }
 
@@ -194,8 +207,8 @@ export default function Sync() {
                   <th>方式</th>
                   <th>接口</th>
                   <th>本地行数</th>
-                  <th>最近同步</th>
                   <th>同步计划</th>
+                  <th>最近同步</th>
                   <th>最近任务</th>
                   <th>耗时</th>
                   <th>操作</th>

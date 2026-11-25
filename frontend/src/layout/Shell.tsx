@@ -1,36 +1,146 @@
-import { useEffect, useRef, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { api, clearSession, getUser } from '../api/client'
 import Icon, { IconName } from '../components/Icon'
 import Logo from '../components/Logo'
 
-const menuAll: { to: string; label: string; icon: IconName; adminOnly: boolean }[] = [
-  { to: '/', label: '首页', icon: 'home', adminOnly: false },
-  { to: '/reports', label: '报表', icon: 'report', adminOnly: false },
-  { to: '/datasources', label: '数据源', icon: 'datasource', adminOnly: true },
-  { to: '/endpoints', label: '接口', icon: 'api', adminOnly: true },
-  { to: '/datasets', label: '数据集', icon: 'dataset', adminOnly: true },
-  { to: '/relations', label: '关联关系', icon: 'relation', adminOnly: true },
-  { to: '/sync', label: '数据同步', icon: 'dataset', adminOnly: true },
-  { to: '/users', label: '用户管理', icon: 'users', adminOnly: true },
-  { to: '/about', label: '使用说明', icon: 'help', adminOnly: false },
+type NavItem = { to: string; label: string; icon: IconName; adminOnly: boolean; group: string }
+type ReportLite = { code: string; name: string; description?: string }
+
+const NAV_GROUPS: { key: string; title: string; adminOnly: boolean; items: NavItem[] }[] = [
+  {
+    key: 'analysis',
+    title: '业务分析',
+    adminOnly: false,
+    items: [
+      { to: '/', label: '经营看板', icon: 'home', adminOnly: false, group: '业务分析' },
+      { to: '/reports', label: '报表中心', icon: 'report', adminOnly: false, group: '业务分析' },
+    ],
+  },
+  {
+    key: 'integration',
+    title: '数据集成',
+    adminOnly: true,
+    items: [
+      { to: '/sync', label: '数据同步', icon: 'sync', adminOnly: true, group: '数据集成' },
+      { to: '/datasources', label: '数据源', icon: 'datasource', adminOnly: true, group: '数据集成' },
+      { to: '/endpoints', label: '接口管理', icon: 'api', adminOnly: true, group: '数据集成' },
+      { to: '/datasets', label: '数据集', icon: 'dataset', adminOnly: true, group: '数据集成' },
+      { to: '/relations', label: '关联关系', icon: 'relation', adminOnly: true, group: '数据集成' },
+    ],
+  },
+  {
+    key: 'system',
+    title: '系统管理',
+    adminOnly: true,
+    items: [
+      { to: '/users', label: '用户管理', icon: 'users', adminOnly: true, group: '系统管理' },
+    ],
+  },
 ]
+
+const ROUTE_META: Record<string, { group?: string; title: string }> = {
+  '/': { title: '经营看板' },
+  '/reports': { group: '业务分析', title: '报表中心' },
+  '/sync': { group: '数据集成', title: '数据同步' },
+  '/datasources': { group: '数据集成', title: '数据源' },
+  '/endpoints': { group: '数据集成', title: '接口管理' },
+  '/datasets': { group: '数据集成', title: '数据集' },
+  '/relations': { group: '数据集成', title: '关联关系' },
+  '/users': { group: '系统管理', title: '用户管理' },
+  '/profile': { title: '个人中心' },
+  '/about': { title: '使用说明' },
+}
+
+const SIDEBAR_KEY = 'report_hub_sidebar_collapsed'
 
 export default function Shell() {
   const user = getUser()
   const navigate = useNavigate()
+  const location = useLocation()
   const isAdmin = user?.role === 'admin'
-  const menu = menuAll.filter((item) => isAdmin || !item.adminOnly)
+
+  const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_KEY) === '1')
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [integrationOpen, setIntegrationOpen] = useState(true)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [cmdOpen, setCmdOpen] = useState(false)
+  const [cmdQuery, setCmdQuery] = useState('')
+  const [cmdIdx, setCmdIdx] = useState(0)
+
   const [queryMode, setQueryMode] = useState<string>('local')
   const [modeBusy, setModeBusy] = useState<string>('')
   const [modeError, setModeError] = useState<string>('')
+  const [reports, setReports] = useState<ReportLite[]>([])
+  const [syncFailed, setSyncFailed] = useState<number>(0)
+
+  const menuRef = useRef<HTMLDivElement>(null)
+  const cmdInputRef = useRef<HTMLInputElement>(null)
+
+  const displayName = user?.displayName || user?.username || 'U'
+  const initials = displayName.slice(0, 2).toUpperCase()
+  const roleLabel = isAdmin ? '管理员' : '查询员'
+
+  const isReportDetail = /^\/reports\/[^/]+/.test(location.pathname)
 
   useEffect(() => {
     api.get<any>('/api/settings/query-mode').then((d) => {
       setQueryMode(d?.queryMode || 'local')
     }).catch(() => {})
+    api.get<ReportLite[]>('/api/reports').then((list) => {
+      setReports(list || [])
+    }).catch(() => {})
+    if (isAdmin) {
+      api.get<any[]>('/api/sync/status').then((list) => {
+        const failed = (list || []).filter((x) => x.lastJobStatus === 'failed').length
+        setSyncFailed(failed)
+      }).catch(() => {})
+    }
+  }, [isAdmin])
+
+  useEffect(() => {
+    setDrawerOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setCmdOpen((v) => !v)
+        setCmdQuery('')
+        setCmdIdx(0)
+      } else if (e.key === 'Escape') {
+        setCmdOpen(false)
+        setMenuOpen(false)
+        setDrawerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [])
+
+  useEffect(() => {
+    if (cmdOpen) {
+      setTimeout(() => cmdInputRef.current?.focus(), 20)
+    }
+  }, [cmdOpen])
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev
+      localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0')
+      return next
+    })
+  }
 
   async function switchQueryMode(mode: string) {
     if (modeBusy || mode === queryMode) return
@@ -39,7 +149,6 @@ export default function Shell() {
     try {
       await api.post<any>('/api/settings/query-mode', { queryMode: mode })
       setQueryMode(mode)
-      // 模式切换后整页重取数据（首页看板/报表查询都随模式走）
       window.location.reload()
     } catch (e: any) {
       setModeError(`切换失败：${e?.message || '请重试'}`)
@@ -48,50 +157,216 @@ export default function Shell() {
       setModeBusy('')
     }
   }
-  const menuRef = useRef<HTMLDivElement>(null)
-  const displayName = user?.displayName || user?.username || 'U'
-  const initials = displayName.slice(0, 2).toUpperCase()
-  const roleLabel = user?.role === 'admin' ? '管理员' : '查询员'
 
-  useEffect(() => {
-    function onDoc(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false)
+  const visibleGroups = useMemo(
+    () => NAV_GROUPS.filter((g) => isAdmin || !g.adminOnly),
+    [isAdmin]
+  )
+
+  const breadcrumb = useMemo(() => {
+    const p = location.pathname
+    if (p.startsWith('/reports/')) {
+      const code = decodeURIComponent(p.slice('/reports/'.length))
+      const found = reports.find((r) => r.code === code)
+      return {
+        parent: { label: '报表中心', to: '/reports' },
+        current: found?.name || code,
       }
     }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [])
+    const meta = ROUTE_META[p]
+    if (meta) {
+      return {
+        parent: meta.group ? { label: meta.group, to: '' } : null,
+        current: meta.title,
+      }
+    }
+    return { parent: null, current: '经营看板' }
+  }, [location.pathname, reports])
+
+  const cmdItems = useMemo(() => {
+    const out: { id: string; label: string; sub: string; to: string; icon: IconName }[] = []
+    for (const r of reports) {
+      out.push({
+        id: `rpt:${r.code}`,
+        label: r.name,
+        sub: `报表 · ${r.code}`,
+        to: `/reports/${r.code}`,
+        icon: 'report',
+      })
+    }
+    for (const g of visibleGroups) {
+      for (const it of g.items) {
+        out.push({
+          id: `nav:${it.to}`,
+          label: it.label,
+          sub: g.title,
+          to: it.to,
+          icon: it.icon,
+        })
+      }
+    }
+    out.push({ id: 'nav:/about', label: '使用说明', sub: '帮助', to: '/about', icon: 'help' })
+    out.push({ id: 'nav:/profile', label: '个人中心', sub: '账号', to: '/profile', icon: 'user' })
+    const kw = cmdQuery.trim().toLowerCase()
+    if (!kw) return out
+    return out.filter(
+      (x) => x.label.toLowerCase().includes(kw) || x.sub.toLowerCase().includes(kw)
+    )
+  }, [reports, visibleGroups, cmdQuery])
+
+  useEffect(() => {
+    setCmdIdx(0)
+  }, [cmdQuery])
+
+  function runCmd(idx: number) {
+    const item = cmdItems[idx]
+    if (!item) return
+    setCmdOpen(false)
+    setCmdQuery('')
+    navigate(item.to)
+  }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={`app-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
+      {drawerOpen && (
+        <div className="sidebar-backdrop" onClick={() => setDrawerOpen(false)} aria-hidden />
+      )}
+      <aside className={`sidebar${drawerOpen ? ' open' : ''}`}>
         <div className="brand">
-          <Logo size={30} title="REPORT HUB" subtitle="多源关联报表" />
+          <Logo
+            size={30}
+            title={collapsed ? '' : 'REPORT HUB'}
+            subtitle={collapsed ? '' : '智能经营报表'}
+          />
         </div>
-        <nav className="nav">
-          {menu.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) => (isActive ? 'active' : '')}
-              onClick={() => setMenuOpen(false)}
-            >
-              <span className="ico"><Icon name={item.icon} size={17} /></span>
-              {item.label}
-            </NavLink>
-          ))}
+
+        <nav className="nav" aria-label="主导航">
+          {visibleGroups.map((group) => {
+            const isCollapsible = group.key === 'integration' && !collapsed
+            const expanded = isCollapsible ? integrationOpen : true
+            return (
+              <div className="nav-group" key={group.key}>
+                {!collapsed && (
+                  isCollapsible ? (
+                    <button
+                      type="button"
+                      className="nav-group-title clickable"
+                      onClick={() => setIntegrationOpen((v) => !v)}
+                    >
+                      <span>{group.title}</span>
+                      <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
+                    </button>
+                  ) : (
+                    <div className="nav-group-title">{group.title}</div>
+                  )
+                )}
+
+                {expanded && group.items.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.to === '/'}
+                    title={collapsed ? item.label : undefined}
+                    className={({ isActive }) => (isActive ? 'active' : '')}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <span className="ico"><Icon name={item.icon} size={17} /></span>
+                    {!collapsed && <span className="nav-label">{item.label}</span>}
+                    {item.to === '/sync' && syncFailed > 0 && (
+                      <span className="nav-badge err" title={`${syncFailed} 项同步异常`}>
+                        {syncFailed}
+                      </span>
+                    )}
+                  </NavLink>
+                ))}
+
+                {/* 业务分析组下方：常用报表一键直达 */}
+                {group.key === 'analysis' && !collapsed && reports.length > 0 && (
+                  <div className="nav-sublist">
+                    {reports.slice(0, 5).map((r) => (
+                      <NavLink
+                        key={r.code}
+                        to={`/reports/${r.code}`}
+                        className={({ isActive }) => `nav-sub-item${isActive ? ' active' : ''}`}
+                        title={r.name}
+                      >
+                        <span className="nav-sub-dot" />
+                        <span className="nav-label">{r.name}</span>
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </nav>
+
+        <div className="sidebar-foot">
+          <NavLink
+            to="/about"
+            title="使用说明"
+            className={({ isActive }) => `sidebar-foot-btn${isActive ? ' active' : ''}`}
+          >
+            <Icon name="help" size={16} />
+            {!collapsed && <span>使用说明</span>}
+          </NavLink>
+          <button
+            type="button"
+            className="sidebar-foot-btn sidebar-collapse-btn"
+            onClick={toggleCollapsed}
+            title={collapsed ? '展开侧边栏' : '收起侧边栏'}
+            aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+          >
+            <Icon name="sidebar" size={16} />
+            {!collapsed && <span>收起</span>}
+          </button>
+        </div>
       </aside>
+
       <div className="main">
         <header className="topbar">
-          <div className="topbar-links">
-            <span>配置中心</span>
-            <span className="muted">·</span>
-            <NavLink to="/about">使用说明</NavLink>
+          <div className="topbar-left">
+            <button
+              type="button"
+              className="btn sm ghost icon-only mobile-menu-btn"
+              aria-label="打开导航菜单"
+              onClick={() => setDrawerOpen((v) => !v)}
+            >
+              <Icon name="menu" size={16} />
+            </button>
+            <nav className="breadcrumb" aria-label="当前位置">
+              {breadcrumb.parent && (
+                <>
+                  {breadcrumb.parent.to ? (
+                    <NavLink to={breadcrumb.parent.to} className="crumb-parent">
+                      {breadcrumb.parent.label}
+                    </NavLink>
+                  ) : (
+                    <span className="crumb-parent">{breadcrumb.parent.label}</span>
+                  )}
+                  <Icon name="chevronRight" size={12} className="crumb-sep" />
+                </>
+              )}
+              <span className="crumb-current">{breadcrumb.current}</span>
+            </nav>
           </div>
-          <div className="row" ref={menuRef} style={{ position: 'relative', gap: 10 }}>
+
+          <div className="row topbar-right" ref={menuRef} style={{ position: 'relative', gap: 10 }}>
+            <button
+              type="button"
+              className="cmd-trigger"
+              onClick={() => {
+                setCmdOpen(true)
+                setCmdQuery('')
+                setCmdIdx(0)
+              }}
+              title="快速跳转报表或菜单 (⌘K / Ctrl+K)"
+            >
+              <Icon name="search" size={13} />
+              <span className="cmd-trigger-text">跳转报表 / 功能…</span>
+              <kbd>⌘K</kbd>
+            </button>
+
             {isAdmin ? (
               <div className="seg" role="group" aria-label="数据模式">
                 <button
@@ -117,7 +392,7 @@ export default function Shell() {
               </span>
             )}
             {modeError && (
-              <div className="error-banner" style={{ position: 'absolute', right: 0, top: 40, zIndex: 50, fontSize: 12, padding: '8px 12px' }}>
+              <div className="error-banner" style={{ position: 'absolute', right: 0, top: 44, zIndex: 50, fontSize: 12, padding: '8px 12px' }}>
                 {modeError}
               </div>
             )}
@@ -191,10 +466,61 @@ export default function Shell() {
             </div>
           </div>
         </header>
-        <div className="content">
+
+        <div className={`content${isReportDetail ? ' content-wide' : ''}`}>
           <Outlet />
         </div>
       </div>
+
+      {cmdOpen && (
+        <div className="modal-backdrop" onClick={() => setCmdOpen(false)}>
+          <div className="cmd-palette" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="快捷跳转">
+            <div className="cmd-input-row">
+              <Icon name="search" size={16} />
+              <input
+                ref={cmdInputRef}
+                value={cmdQuery}
+                onChange={(e) => setCmdQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setCmdIdx((i) => Math.min(cmdItems.length - 1, i + 1))
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setCmdIdx((i) => Math.max(0, i - 1))
+                  } else if (e.key === 'Enter') {
+                    e.preventDefault()
+                    runCmd(cmdIdx)
+                  }
+                }}
+                placeholder="输入报表名称或菜单关键词…"
+              />
+              <kbd>ESC</kbd>
+            </div>
+            <div className="cmd-list">
+              {cmdItems.length === 0 ? (
+                <div className="cmd-empty">未找到匹配的报表或功能</div>
+              ) : (
+                cmdItems.map((it, idx) => (
+                  <button
+                    type="button"
+                    key={it.id}
+                    className={`cmd-item${idx === cmdIdx ? ' active' : ''}`}
+                    onMouseEnter={() => setCmdIdx(idx)}
+                    onClick={() => runCmd(idx)}
+                  >
+                    <span className="cmd-item-left">
+                      <Icon name={it.icon} size={15} />
+                      <span>{it.label}</span>
+                    </span>
+                    <span className="cmd-item-sub">{it.sub}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

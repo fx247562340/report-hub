@@ -238,6 +238,195 @@ public class ContractScrollService {
         return latest == null ? null : latest.toString();
     }
 
+    /**
+     * 首页经营驾驶舱聚合视图（基于滚动报表真实数据，自动复用 ReportResultCache）。
+     */
+    public Map<String, Object> computeExecutiveOverview(String requestedMonth) {
+        String nowYm = YearMonth.now().toString();
+        String latestMonth = nowYm.compareTo(BASELINE_MONTH) < 0 ? BASELINE_MONTH : nowYm;
+        List<String> allMonths = enumerateMonths(BASELINE_MONTH, latestMonth);
+        List<String> availableMonths = new ArrayList<>(allMonths);
+        Collections.reverse(availableMonths);
+
+        String targetMonth = (requestedMonth != null && requestedMonth.matches("\\d{4}-\\d{2}")
+                && requestedMonth.compareTo(BASELINE_MONTH) >= 0
+                && requestedMonth.compareTo(latestMonth) <= 0)
+                ? requestedMonth : latestMonth;
+
+        String prevMonth = targetMonth.compareTo(BASELINE_MONTH) > 0
+                ? YearMonth.parse(targetMonth).minusMonths(1).toString() : null;
+
+        ScrollReportView curView = computeView(Map.of("month", targetMonth), 1, 10000);
+        ScrollReportView prevView = prevMonth != null ? computeView(Map.of("month", prevMonth), 1, 10000) : null;
+
+        Map<String, Object> curSum = curView.summaryRow() != null ? curView.summaryRow() : Map.of();
+        Map<String, Object> prevSum = (prevView != null && prevView.summaryRow() != null) ? prevView.summaryRow() : Map.of();
+
+        double curWhiteShip = numOf(curSum.get("cur_white_ship"));
+        double prevWhiteShip = numOf(prevSum.get("cur_white_ship"));
+        double curWhiteIn = numOf(curSum.get("cur_white_in"));
+
+        double curInv = numOf(curSum.get("cur_inv_amt"));
+        double prevInv = numOf(prevSum.get("cur_inv_amt"));
+        double endInvCum = numOf(curSum.get("end_inv_cum"));
+
+        double curPay = numOf(curSum.get("cur_pay_amt"));
+        double prevPay = numOf(prevSum.get("cur_pay_amt"));
+
+        double endDebt = numOf(curSum.get("end_total_debt"));
+        double prevDebt = prevMonth != null ? numOf(prevSum.get("end_total_debt")) : numOf(curSum.get("open_total_debt"));
+        double endInvUnpaid = numOf(curSum.get("end_inv_unpaid_amt"));
+
+        double endBlackStock = numOf(curSum.get("end_black_stock"));
+        double endWhiteStock = numOf(curSum.get("end_white_stock"));
+        double endStockTotal = round4(endBlackStock + endWhiteStock);
+        double prevStockTotal = prevMonth != null
+                ? round4(numOf(prevSum.get("end_black_stock")) + numOf(prevSum.get("end_white_stock")))
+                : round4(numOf(curSum.get("open_black_stock")) + numOf(curSum.get("open_white_stock")));
+
+        String baseDrill = "/reports/" + REPORT_CODE + "?month=" + targetMonth;
+        List<Map<String, Object>> kpis = new ArrayList<>();
+        kpis.add(kpiItem("white_ship", "当月白件发货", round2(curWhiteShip), prevMonth != null ? round2(prevWhiteShip) : null,
+                "吨", "ton", true, "当月白件入库 " + fmtNum(curWhiteIn) + " 吨", baseDrill));
+        kpis.add(kpiItem("invoice_amt", "当月开票金额", round2(curInv), prevMonth != null ? round2(prevInv) : null,
+                "元", "money", true, "累计开票 " + fmtWan(endInvCum), baseDrill));
+        kpis.add(kpiItem("payment_amt", "当月回款金额", round2(curPay), prevMonth != null ? round2(prevPay) : null,
+                "元", "money", true,
+                curInv > 0.01 ? "当月回款/开票比 " + Math.round((curPay / curInv) * 100) + "%" : "累计回款 " + fmtWan(numOf(curSum.get("end_pay_cum"))),
+                baseDrill));
+        kpis.add(kpiItem("total_debt", "期末总欠款", round2(endDebt), round2(prevDebt),
+                "元", "money", false, "已开票未回款 " + fmtWan(endInvUnpaid), baseDrill));
+        kpis.add(kpiItem("wip_stock", "期末在制库存", round2(endStockTotal), round2(prevStockTotal),
+                "吨", "ton", null,
+                "黑件 " + fmtNum(endBlackStock) + " 吨 · 白件 " + fmtNum(endWhiteStock) + " 吨", baseDrill));
+
+        // 趋势序列：最多近 6 个月（按时间正序）
+        List<String> seriesMonths = allMonths.size() > 6 ? allMonths.subList(allMonths.size() - 6, allMonths.size()) : allMonths;
+        List<Map<String, Object>> monthlySeries = new ArrayList<>(seriesMonths.size());
+        for (String ym : seriesMonths) {
+            ScrollReportView v = ym.equals(targetMonth) ? curView
+                    : (ym.equals(prevMonth) && prevView != null ? prevView : computeView(Map.of("month", ym), 1, 10000));
+            Map<String, Object> s = v.summaryRow() != null ? v.summaryRow() : Map.of();
+            Map<String, Object> pt = new LinkedHashMap<>();
+            pt.put("month", ym);
+            pt.put("label", Integer.parseInt(ym.substring(5)) + "月");
+            pt.put("blackIn", round2(numOf(s.get("cur_black_in"))));
+            pt.put("blackOut", round2(numOf(s.get("cur_black_out"))));
+            pt.put("whiteIn", round2(numOf(s.get("cur_white_in"))));
+            pt.put("whiteShip", round2(numOf(s.get("cur_white_ship"))));
+            pt.put("invoiceAmt", round2(numOf(s.get("cur_inv_amt"))));
+            pt.put("paymentAmt", round2(numOf(s.get("cur_pay_amt"))));
+            pt.put("totalDebt", round2(numOf(s.get("end_total_debt"))));
+            monthlySeries.add(pt);
+        }
+
+        // 客户欠款 Top 8（合并同客户多合同）
+        Map<String, double[]> custAgg = new LinkedHashMap<>();
+        Map<String, Set<String>> custContracts = new HashMap<>();
+        for (Map<String, Object> row : curView.rows()) {
+            String cust = String.valueOf(row.getOrDefault("customer_name", "")).trim();
+            if (cust.isEmpty()) continue;
+            double[] acc = custAgg.computeIfAbsent(cust, k -> new double[3]);
+            acc[0] += numOf(row.get("end_total_debt"));
+            acc[1] += numOf(row.get("end_inv_unpaid_amt"));
+            acc[2] += numOf(row.get("end_ship_uninv_amt"));
+            String cno = String.valueOf(row.getOrDefault("contract_no", "")).trim();
+            if (!cno.isEmpty()) {
+                custContracts.computeIfAbsent(cust, k -> new HashSet<>()).add(cno);
+            }
+        }
+        double positiveDebtSum = custAgg.values().stream().mapToDouble(a -> Math.max(0, a[0])).sum();
+        List<Map<String, Object>> topDebtCustomers = custAgg.entrySet().stream()
+                .filter(e -> e.getValue()[0] > 0.01)
+                .sorted((a, b) -> Double.compare(b.getValue()[0], a.getValue()[0]))
+                .limit(8)
+                .map(e -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("customerName", e.getKey());
+                    m.put("totalDebt", round2(e.getValue()[0]));
+                    m.put("invUnpaid", round2(e.getValue()[1]));
+                    m.put("shipUninv", round2(e.getValue()[2]));
+                    m.put("contractCount", custContracts.getOrDefault(e.getKey(), Set.of()).size());
+                    m.put("sharePct", positiveDebtSum > 0.01 ? round2(e.getValue()[0] * 100.0 / positiveDebtSum) : 0.0);
+                    return m;
+                }).toList();
+
+        // 负库存预警 Top 8
+        List<Map<String, Object>> stockAlerts = curView.rows().stream()
+                .filter(row -> numOf(row.get("end_black_stock")) < -0.001 || numOf(row.get("end_white_stock")) < -0.001)
+                .sorted(Comparator.comparingDouble(row -> Math.min(numOf(row.get("end_black_stock")), numOf(row.get("end_white_stock")))))
+                .limit(8)
+                .map(row -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("contractNo", String.valueOf(row.getOrDefault("contract_no", "")));
+                    m.put("customerName", String.valueOf(row.getOrDefault("customer_name", "")));
+                    m.put("productName", String.valueOf(row.getOrDefault("product_name", "")));
+                    m.put("blackStock", round2(numOf(row.get("end_black_stock"))));
+                    m.put("whiteStock", round2(numOf(row.get("end_white_stock"))));
+                    return m;
+                }).toList();
+
+        long totalNegativeCount = curView.rows().stream()
+                .filter(row -> numOf(row.get("end_black_stock")) < -0.001 || numOf(row.get("end_white_stock")) < -0.001)
+                .count();
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("month", targetMonth);
+        out.put("monthLabel", curView.monthLabel());
+        out.put("prevMonth", prevMonth);
+        out.put("availableMonths", availableMonths);
+        out.put("contractCount", curView.total());
+        out.put("kpis", kpis);
+        out.put("monthlySeries", monthlySeries);
+        out.put("topDebtCustomers", topDebtCustomers);
+        out.put("stockAlerts", stockAlerts);
+        out.put("stockAlertTotal", totalNegativeCount);
+        out.put("lastSyncedAt", curView.lastSyncedAt());
+        return out;
+    }
+
+    private Map<String, Object> kpiItem(String key, String label, double value, Double prevValue,
+                                        String unit, String kind, Boolean positiveIsGood,
+                                        String sub, String drillUrl) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("key", key);
+        m.put("label", label);
+        m.put("value", value);
+        m.put("prevValue", prevValue);
+        Double deltaPct = null;
+        if (prevValue != null && Math.abs(prevValue) > 0.01) {
+            deltaPct = round2((value - prevValue) * 100.0 / Math.abs(prevValue));
+        }
+        m.put("deltaPct", deltaPct);
+        m.put("unit", unit);
+        m.put("kind", kind);
+        m.put("positiveIsGood", positiveIsGood);
+        m.put("sub", sub);
+        m.put("drillUrl", drillUrl);
+        return m;
+    }
+
+    private static double numOf(Object v) {
+        if (v instanceof Number n) return n.doubleValue();
+        if (v == null) return 0.0;
+        try {
+            return Double.parseDouble(String.valueOf(v).trim());
+        } catch (Exception e) {
+            return 0.0;
+        }
+    }
+
+    private static String fmtNum(double v) {
+        return String.format(java.util.Locale.CHINA, "%,.2f", v);
+    }
+
+    private static String fmtWan(double v) {
+        if (Math.abs(v) >= 10000.0) {
+            return String.format(java.util.Locale.CHINA, "%,.2f 万", v / 10000.0);
+        }
+        return String.format(java.util.Locale.CHINA, "%,.2f 元", v);
+    }
+
     // ---------- 内部行与月度桶模型 ----------
 
     private static final class MonthBucket {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api, ensureAuthorized, getUser } from '../api/client'
 import Icon from '../components/Icon'
 import EmptyState from '../components/EmptyState'
@@ -287,25 +287,36 @@ function BaselineEditor({ onClose, onSaved }: { onClose: () => void; onSaved: ()
 
 export default function ContractScrollReport({ code, name }: { code: string; name?: string }) {
   const isAdmin = getUser()?.role === 'admin'
+  const [searchParams, setSearchParams] = useSearchParams()
   const months = useMemo(monthOptions, [])
-  const [month, setMonth] = useState(months[0])
-  const [contractNo, setContractNo] = useState('')
-  const [customer, setCustomer] = useState('')
+  const initMonth = searchParams.get('month')
+  const [month, setMonth] = useState(initMonth && months.includes(initMonth) ? initMonth : months[0])
+  const [contractNo, setContractNo] = useState(searchParams.get('contractNo') || '')
+  const [customer, setCustomer] = useState(searchParams.get('customer') || '')
   const [view, setView] = useState<View | null>(null)
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
   const [baselineOpen, setBaselineOpen] = useState(false)
 
-  const filters = () => ({ month, contract_no: contractNo.trim(), customer_name: customer.trim() })
+  const filters = (m = month, cno = contractNo, cust = customer) => ({
+    month: m,
+    contract_no: cno.trim(),
+    customer_name: cust.trim(),
+  })
 
-  async function run() {
+  async function run(m = month, cno = contractNo, cust = customer) {
     setLoading(true); setError('')
+    const nextParams = new URLSearchParams()
+    if (m) nextParams.set('month', m)
+    if (cno.trim()) nextParams.set('contractNo', cno.trim())
+    if (cust.trim()) nextParams.set('customer', cust.trim())
+    setSearchParams(nextParams, { replace: true })
     try {
-      setView(await api.post<View>('/api/contract-scroll/query', { filters: filters(), page: 1, pageSize: 10000 }))
+      setView(await api.post<View>('/api/contract-scroll/query', { filters: filters(m, cno, cust), page: 1, pageSize: 10000 }))
     } catch (e: any) { setError(e.message) } finally { setLoading(false) }
   }
-  useEffect(() => { run() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [month])
+  useEffect(() => { run(month, contractNo, customer) /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [month])
 
   async function exportExcel() {
     setExporting(true); setError('')
@@ -381,7 +392,7 @@ export default function ContractScrollReport({ code, name }: { code: string; nam
           <button className="btn sm" onClick={exportExcel} disabled={exporting || loading}>
             <Icon name="download" size={13} />{exporting ? '导出中…' : '导出 Excel'}
           </button>
-          <button className="btn sm primary" onClick={run} disabled={loading}>
+          <button className="btn sm primary" onClick={() => run()} disabled={loading}>
             <Icon name="play" size={13} />{loading ? '查询中…' : '执行查询'}
           </button>
         </div>
@@ -401,9 +412,22 @@ export default function ContractScrollReport({ code, name }: { code: string; nam
               onChange={(e) => setContractNo(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && run()} />
           </div>
           <div className="filter-item"><span className="muted">客户</span>
-            <input className="input" placeholder="客户名称关键字" value={customer}
+            <input className="input" style={{ minWidth: 210 }} placeholder="客户名称关键字" value={customer}
               onChange={(e) => setCustomer(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && run()} />
           </div>
+          {(contractNo || customer) && (
+            <button
+              type="button"
+              className="btn sm ghost"
+              onClick={() => {
+                setContractNo('')
+                setCustomer('')
+                run(month, '', '')
+              }}
+            >
+              清空筛选
+            </button>
+          )}
         </div>
         <div className="report-stats">
           {view?.dataMode && (

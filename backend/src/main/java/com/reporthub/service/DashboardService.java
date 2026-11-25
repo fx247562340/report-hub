@@ -4,12 +4,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reporthub.config.ReportHubProperties;
 import com.reporthub.domain.DashboardWidget;
 import com.reporthub.domain.ReportDef;
+import com.reporthub.domain.SyncConfig;
 import com.reporthub.engine.ReportQueryEngine;
-import com.reporthub.repo.DashboardWidgetRepo;
+import com.reporthub.repo.*;
 import org.springframework.stereotype.Service;
 
 import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -22,6 +25,15 @@ public class DashboardService {
     private final ReportQueryEngine engine;
     private final ReportResultCache resultCache;
     private final QueryModeService queryModeService;
+    private final ContractScrollService contractScrollService;
+    private final SyncConfigRepo syncConfigRepo;
+    private final SyncJobRepo syncJobRepo;
+    private final SyncRecordRepo syncRecordRepo;
+    private final DataSourceRepo dataSourceRepo;
+    private final ApiEndpointRepo endpointRepo;
+    private final DatasetRepo datasetRepo;
+    private final RelationRepo relationRepo;
+    private final ReportRepo reportRepo;
     private final ReportHubProperties props;
     private final ObjectMapper mapper;
 
@@ -35,6 +47,15 @@ public class DashboardService {
                             ReportQueryEngine engine,
                             ReportResultCache resultCache,
                             QueryModeService queryModeService,
+                            ContractScrollService contractScrollService,
+                            SyncConfigRepo syncConfigRepo,
+                            SyncJobRepo syncJobRepo,
+                            SyncRecordRepo syncRecordRepo,
+                            DataSourceRepo dataSourceRepo,
+                            ApiEndpointRepo endpointRepo,
+                            DatasetRepo datasetRepo,
+                            RelationRepo relationRepo,
+                            ReportRepo reportRepo,
                             ReportHubProperties props,
                             ObjectMapper mapper) {
         this.widgetRepo = widgetRepo;
@@ -42,8 +63,77 @@ public class DashboardService {
         this.engine = engine;
         this.resultCache = resultCache;
         this.queryModeService = queryModeService;
+        this.contractScrollService = contractScrollService;
+        this.syncConfigRepo = syncConfigRepo;
+        this.syncJobRepo = syncJobRepo;
+        this.syncRecordRepo = syncRecordRepo;
+        this.dataSourceRepo = dataSourceRepo;
+        this.endpointRepo = endpointRepo;
+        this.datasetRepo = datasetRepo;
+        this.relationRepo = relationRepo;
+        this.reportRepo = reportRepo;
         this.props = props;
         this.mapper = mapper;
+    }
+
+    /** 经营驾驶舱全量概览（一次聚合返回：镀锌经营指标、月度趋势、欠款榜、负库存预警、同步健康、管理员摘要） */
+    public Map<String, Object> getOverview(String month, boolean isAdmin, boolean forceRefresh) {
+        if (forceRefresh) {
+            resultCache.invalidateReport(ContractScrollService.REPORT_CODE);
+            invalidate();
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("queryMode", queryModeService.mode());
+        out.put("generatedAt", Instant.now().toString());
+        out.put("syncHealth", buildSyncHealth());
+        if (isAdmin) {
+            Map<String, Object> admin = new LinkedHashMap<>();
+            admin.put("datasources", dataSourceRepo.count());
+            admin.put("endpoints", endpointRepo.count());
+            admin.put("datasets", datasetRepo.count());
+            admin.put("relations", relationRepo.count());
+            admin.put("reports", reportRepo.count());
+            out.put("adminSummary", admin);
+        }
+        try {
+            out.put("executive", contractScrollService.computeExecutiveOverview(month));
+        } catch (Exception e) {
+            out.put("executive", Map.of("error", e.getMessage() == null ? "经营数据暂不可用" : e.getMessage()));
+        }
+        return out;
+    }
+
+    private Map<String, Object> buildSyncHealth() {
+        List<SyncConfig> configs = syncConfigRepo.findAll();
+        int total = configs.size();
+        int enabled = 0;
+        int failed = 0;
+        int running = 0;
+        Instant latest = null;
+        List<String> failedNames = new ArrayList<>();
+        for (SyncConfig c : configs) {
+            if (Boolean.TRUE.equals(c.getEnabled())) enabled++;
+            Instant ts = syncRecordRepo.findLastSyncedAt(c.getDatasetCode());
+            if (ts != null && (latest == null || ts.isAfter(latest))) latest = ts;
+            var lastJob = syncJobRepo.findByDatasetCodeOrderByStartedAtDesc(c.getDatasetCode()).stream().findFirst();
+            if (lastJob.isPresent()) {
+                String st = lastJob.get().getStatus();
+                if ("failed".equalsIgnoreCase(st)) {
+                    failed++;
+                    if (failedNames.size() < 4) failedNames.add(c.getDatasetCode());
+                } else if ("running".equalsIgnoreCase(st) || "queued".equalsIgnoreCase(st)) {
+                    running++;
+                }
+            }
+        }
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("total", total);
+        m.put("enabled", enabled);
+        m.put("failed", failed);
+        m.put("running", running);
+        m.put("lastSyncedAt", latest == null ? null : latest.toString());
+        m.put("failedDatasets", failedNames);
+        return m;
     }
 
     public List<DashboardWidget> listWidgets() {
@@ -51,24 +141,26 @@ public class DashboardService {
     }
 
     public List<DashboardWidget> saveWidgets(List<DashboardWidget> widgets) {
-        // 固定 4 格：不足补齐、多余丢弃
+        // 支持灵活配置 0~8 个自定义指标卡片（向下兼容原 4 格）
+        List<DashboardWidget> input = widgets == null ? List.of() : widgets;
+        int limit = Math.min(8, input.size());
         List<DashboardWidget> out = new ArrayList<>();
-        for (int i = 0; i < 4; i++) {
-            DashboardWidget w = (widgets != null && widgets.size() > i && widgets.get(i) != null)
-                    ? widgets.get(i) : new DashboardWidget();
+        for (int i = 0; i < limit; i++) {
+            DashboardWidget w = input.get(i);
+            if (w == null) continue;
             if (w.getId() == null || w.getId().isBlank()) {
-                w.setId("dw-slot-" + (i + 1));
+                w.setId("dw-slot-" + (i + 1) + "-" + System.currentTimeMillis());
             }
             if (w.getTitle() == null || w.getTitle().isBlank()) w.setTitle("指标 " + (i + 1));
             if (w.getReportCode() == null) w.setReportCode("");
             w.setSort(i);
-            w.setEnabled(true);
+            w.setEnabled(w.getEnabled() == null ? true : w.getEnabled());
             if (w.getMetric() == null || w.getMetric().isBlank()) w.setMetric("count");
             if (w.getFiltersJson() == null || w.getFiltersJson().isBlank()) w.setFiltersJson("{}");
             if (w.getTimeRange() == null || w.getTimeRange().isBlank()) w.setTimeRange("month");
             String tr = w.getTimeRange().toLowerCase();
             if (!tr.equals("today") && !tr.equals("week") && !tr.equals("month")) w.setTimeRange("month");
-            w.setUpdatedAt(java.time.Instant.now());
+            w.setUpdatedAt(Instant.now());
             out.add(widgetRepo.save(w));
         }
         Set<String> keep = new HashSet<>();
@@ -150,6 +242,7 @@ public class DashboardService {
         Map<String, String> bounds = timeBounds(w.getTimeRange());
         item.put("dateStart", bounds.get("start"));
         item.put("dateEnd", bounds.get("end"));
+        item.put("filtersJson", w.getFiltersJson() == null ? "{}" : w.getFiltersJson());
         try {
             ReportDef report = configService.getReport(w.getReportCode());
             item.put("reportName", report.getName());
@@ -354,7 +447,7 @@ public class DashboardService {
         return m;
     }
 
-    /** 合并时间窗到查询 filters；dateKey 为空时用报表首个 date_range 筛选名 */
+    /** 合并时间窗到查询 filters；dateKey 为空时用报表首个 date_range / month 筛选名 */
     @SuppressWarnings("unchecked")
     Map<String, Object> buildFilters(ReportDef report, DashboardWidget w) {
         Map<String, Object> filters = new LinkedHashMap<>(readFilters(w.getFiltersJson()));
@@ -363,6 +456,10 @@ public class DashboardService {
             dateKey = findDateFilterKey(report.getFiltersJson());
         }
         if (dateKey == null || dateKey.isBlank()) return filters;
+        if (isMonthFilter(report.getFiltersJson(), dateKey)) {
+            filters.putIfAbsent(dateKey, YearMonth.now().toString());
+            return filters;
+        }
         Map<String, String> bounds = timeBounds(w.getTimeRange());
         Object cur = filters.get(dateKey);
         Map<String, Object> range = new LinkedHashMap<>();
@@ -376,6 +473,23 @@ public class DashboardService {
     }
 
     @SuppressWarnings("unchecked")
+    private boolean isMonthFilter(String filtersJson, String key) {
+        if ("month".equalsIgnoreCase(key)) return true;
+        try {
+            List<Map<String, Object>> arr = mapper.readValue(
+                    filtersJson == null || filtersJson.isBlank() ? "[]" : filtersJson, List.class);
+            for (Map<String, Object> f : arr) {
+                if (key.equals(String.valueOf(f.getOrDefault("key", "")))) {
+                    String op = String.valueOf(f.getOrDefault("op", f.getOrDefault("type", "")));
+                    return "month".equals(op);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    @SuppressWarnings("unchecked")
     private String findDateFilterKey(String filtersJson) {
         try {
             List<Map<String, Object>> arr = mapper.readValue(
@@ -383,13 +497,13 @@ public class DashboardService {
             for (Map<String, Object> f : arr) {
                 String op = String.valueOf(f.getOrDefault("op", f.getOrDefault("type", "")));
                 String key = String.valueOf(f.getOrDefault("key", ""));
-                if (("date_range".equals(op) || "date".equals(op)) && !key.isBlank() && !"null".equals(key)) {
+                if (("date_range".equals(op) || "date".equals(op) || "month".equals(op)) && !key.isBlank() && !"null".equals(key)) {
                     return key;
                 }
             }
             for (Map<String, Object> f : arr) {
                 String key = String.valueOf(f.getOrDefault("key", ""));
-                if (key.toLowerCase().contains("time") || key.toLowerCase().contains("date")) return key;
+                if (key.toLowerCase().contains("time") || key.toLowerCase().contains("date") || key.toLowerCase().contains("month")) return key;
             }
         } catch (Exception ignored) {
         }
