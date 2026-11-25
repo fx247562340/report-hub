@@ -158,6 +158,11 @@ public class ContractScrollService {
     }
 
     public ScrollReportView computeView(Map<String, Object> filters, int page, int pageSize) {
+        return computeViewWithSharedRaw(filters, page, pageSize, null);
+    }
+
+    private ScrollReportView computeViewWithSharedRaw(Map<String, Object> filters, int page, int pageSize,
+                                                      Map<String, List<ObjectNode>> sharedRawByDs) {
         long t0 = System.currentTimeMillis();
         String targetMonth = extractTargetMonth(filters);
         if (targetMonth.compareTo(BASELINE_MONTH) < 0) {
@@ -179,7 +184,7 @@ public class ContractScrollService {
             trace.add(new ReportQueryEngine.TraceCall("cache", "result-cache", "hit:" + tm, allProjected.size(), 0));
         } else {
             var loaded = resultCache.getOrLoad(cacheKey, () -> {
-                Map<String, List<ObjectNode>> rawByDs = loadDatasets(trace);
+                Map<String, List<ObjectNode>> rawByDs = sharedRawByDs != null ? sharedRawByDs : loadDatasets(trace);
                 List<WorkingRow> workingRows = buildWorkingRows(tm, rawByDs);
                 List<String> months = enumerateMonths(BASELINE_MONTH, tm);
                 accumulateUpstreamFlows(workingRows, months, rawByDs);
@@ -256,8 +261,22 @@ public class ContractScrollService {
         String prevMonth = targetMonth.compareTo(BASELINE_MONTH) > 0
                 ? YearMonth.parse(targetMonth).minusMonths(1).toString() : null;
 
-        ScrollReportView curView = computeView(Map.of("month", targetMonth), 1, 10000);
-        ScrollReportView prevView = prevMonth != null ? computeView(Map.of("month", prevMonth), 1, 10000) : null;
+        // 趋势序列：最多近 6 个月（按时间正序）
+        List<String> seriesMonths = allMonths.size() > 6 ? allMonths.subList(allMonths.size() - 6, allMonths.size()) : allMonths;
+
+        // 实时/本地均复用同一份 9 表原始数据：避免多月份趋势与环比重复打 2~6 轮 U9 接口
+        Set<String> neededMonths = new LinkedHashSet<>(seriesMonths);
+        neededMonths.add(targetMonth);
+        if (prevMonth != null) neededMonths.add(prevMonth);
+        String mode = queryModeService.mode();
+        boolean anyMiss = neededMonths.stream()
+                .anyMatch(m -> resultCache.getFresh(resultCache.key(REPORT_CODE, Map.of("month", m), mode)) == null);
+        Map<String, List<ObjectNode>> sharedRawByDs = anyMiss
+                ? loadDatasets(Collections.synchronizedList(new ArrayList<>())) : null;
+
+        ScrollReportView curView = computeViewWithSharedRaw(Map.of("month", targetMonth), 1, 10000, sharedRawByDs);
+        ScrollReportView prevView = prevMonth != null
+                ? computeViewWithSharedRaw(Map.of("month", prevMonth), 1, 10000, sharedRawByDs) : null;
 
         Map<String, Object> curSum = curView.summaryRow() != null ? curView.summaryRow() : Map.of();
         Map<String, Object> prevSum = (prevView != null && prevView.summaryRow() != null) ? prevView.summaryRow() : Map.of();
@@ -300,12 +319,12 @@ public class ContractScrollService {
                 "吨", "ton", null,
                 "黑件 " + fmtNum(endBlackStock) + " 吨 · 白件 " + fmtNum(endWhiteStock) + " 吨", baseDrill));
 
-        // 趋势序列：最多近 6 个月（按时间正序）
-        List<String> seriesMonths = allMonths.size() > 6 ? allMonths.subList(allMonths.size() - 6, allMonths.size()) : allMonths;
+        // 趋势序列：复用 sharedRawByDs 与缓存
         List<Map<String, Object>> monthlySeries = new ArrayList<>(seriesMonths.size());
         for (String ym : seriesMonths) {
             ScrollReportView v = ym.equals(targetMonth) ? curView
-                    : (ym.equals(prevMonth) && prevView != null ? prevView : computeView(Map.of("month", ym), 1, 10000));
+                    : (ym.equals(prevMonth) && prevView != null ? prevView
+                    : computeViewWithSharedRaw(Map.of("month", ym), 1, 10000, sharedRawByDs));
             Map<String, Object> s = v.summaryRow() != null ? v.summaryRow() : Map.of();
             Map<String, Object> pt = new LinkedHashMap<>();
             pt.put("month", ym);
@@ -1358,7 +1377,7 @@ public class ContractScrollService {
         }
 
         if (!toFetchRemote.isEmpty()) {
-            ExecutorService pool = Executors.newFixedThreadPool(Math.min(4, toFetchRemote.size()));
+            ExecutorService pool = Executors.newFixedThreadPool(Math.min(6, toFetchRemote.size()));
             try {
                 List<CompletableFuture<Void>> futures = new ArrayList<>();
                 for (String dsCode : toFetchRemote) {

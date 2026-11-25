@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api, getUser } from '../api/client'
 import Icon from '../components/Icon'
 import EmptyState from '../components/EmptyState'
-import { CardSkeleton } from '../components/Skeleton'
 
 type ExecKpi = {
   key: string
@@ -272,6 +271,142 @@ function MonthlyTrendChart({
   )
 }
 
+const REALTIME_STAGES = [
+  '连接用友 U9 Cloud',
+  '拉取销售订单与来料',
+  '拉取入库与发货单据',
+  '核算应收开票与核销',
+]
+
+function DashboardLoadingView({
+  isRealtime,
+  elapsedSec,
+  isAdmin,
+  switchingMode,
+  onSwitchLocal,
+}: {
+  isRealtime: boolean
+  elapsedSec: number
+  isAdmin: boolean
+  switchingMode: boolean
+  onSwitchLocal: () => void
+}) {
+  const activeStage = Math.min(
+    REALTIME_STAGES.length - 1,
+    elapsedSec < 2 ? 0 : elapsedSec < 6 ? 1 : elapsedSec < 12 ? 2 : 3
+  )
+
+  return (
+    <div className="dash-loading-wrap" aria-busy="true" aria-live="polite">
+      <div className={`dash-load-banner${isRealtime ? ' realtime' : ''}`}>
+        <div className="dash-load-top">
+          <div className="dash-load-left">
+            <span className="dash-load-spinner" aria-hidden />
+            <div>
+              <div className="dash-load-title">
+                {isRealtime ? '正在实时聚合 U9 经营数据…' : '正在加载经营看板数据…'}
+                <span className="dash-load-timer mono">已等待 {elapsedSec.toFixed(1)}s</span>
+              </div>
+              <div className="dash-load-sub">
+                {isRealtime
+                  ? '实时聚合模式会并发拉取 U9 Cloud 9 张业务单据并滚动核算多月指标，通常需要 10 – 25 秒，请稍候。'
+                  : '正在从本地同步库读取并汇总最新月度指标…'}
+              </div>
+            </div>
+          </div>
+          {isRealtime && isAdmin && (
+            <button
+              type="button"
+              className="btn sm primary"
+              disabled={switchingMode}
+              onClick={onSwitchLocal}
+            >
+              <Icon name="bolt" size={13} />
+              {switchingMode ? '切换中…' : '切回本地数据（秒开）'}
+            </button>
+          )}
+        </div>
+
+        {isRealtime && (
+          <div className="dash-load-stages">
+            {REALTIME_STAGES.map((label, idx) => {
+              const state = idx < activeStage ? 'done' : idx === activeStage ? 'active' : 'pending'
+              return (
+                <div key={label} className={`dash-load-stage ${state}`}>
+                  <span className="dash-stage-dot">
+                    {state === 'done' ? <Icon name="check" size={10} /> : idx + 1}
+                  </span>
+                  <span>{label}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 全宽 5 列 KPI 骨架（与真实布局 1:1 对齐） */}
+      <section className="dash-kpi-grid" aria-hidden>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="dash-kpi-card dash-kpi-skel">
+            <div className="dash-kpi-top">
+              <span className="skel" style={{ width: '48%', height: 12 }} />
+              <span className="skel" style={{ width: 42, height: 18, borderRadius: 999 }} />
+            </div>
+            <div className="dash-kpi-val" style={{ marginTop: 4 }}>
+              <span className="skel" style={{ width: '62%', height: 28, borderRadius: 8 }} />
+            </div>
+            <div className="dash-kpi-foot">
+              <span className="skel" style={{ width: '74%', height: 11 }} />
+            </div>
+          </div>
+        ))}
+      </section>
+
+      {/* 全宽双栏主体骨架（趋势图 + 排行榜） */}
+      <section className="dash-bento" aria-hidden>
+        <div className="card dash-panel dash-skel-panel">
+          <div className="dash-panel-head">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+              <span className="skel" style={{ width: 120, height: 16 }} />
+              <span className="skel" style={{ width: 220, height: 11 }} />
+            </div>
+            <span className="skel" style={{ width: 132, height: 30, borderRadius: 10 }} />
+          </div>
+          <div className="dash-skel-chart">
+            {[46, 72, 58, 86, 64, 92].map((pct, i) => (
+              <div key={i} className="dash-skel-bar-col">
+                <div className="dash-skel-bar-pair">
+                  <span className="skel" style={{ width: 18, height: `${pct}%`, borderRadius: 5 }} />
+                  <span className="skel" style={{ width: 18, height: `${Math.max(24, pct - 18)}%`, borderRadius: 5 }} />
+                </div>
+                <span className="skel" style={{ width: 32, height: 10 }} />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="card dash-panel dash-skel-panel">
+          <div className="dash-panel-head">
+            <span className="skel" style={{ width: 170, height: 28, borderRadius: 8 }} />
+            <span className="skel" style={{ width: 64, height: 26, borderRadius: 8 }} />
+          </div>
+          <div className="dash-skel-ranks">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="dash-skel-rank-row">
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                  <span className="skel" style={{ width: `${58 - i * 4}%`, height: 13 }} />
+                  <span className="skel" style={{ width: 64, height: 13 }} />
+                </div>
+                <span className="skel" style={{ width: `${88 - i * 12}%`, height: 6, borderRadius: 999 }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 export default function Home() {
   const user = getUser()
   const navigate = useNavigate()
@@ -279,9 +414,12 @@ export default function Home() {
   const displayName = user?.displayName || user?.username || '朋友'
 
   const [overview, setOverview] = useState<OverviewData | null>(null)
+  const [liveMode, setLiveMode] = useState<string>('')
   const [selectedMonth, setSelectedMonth] = useState<string>('')
   const [overviewLoading, setOverviewLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [switchingMode, setSwitchingMode] = useState(false)
+  const [elapsedSec, setElapsedSec] = useState(0)
   const [error, setError] = useState('')
 
   const [chartMode, setChartMode] = useState<'finance' | 'tonnage'>('finance')
@@ -298,6 +436,7 @@ export default function Home() {
       const q = qs.toString() ? `?${qs.toString()}` : ''
       const data = await api.get<OverviewData>(`/api/dashboard/overview${q}`)
       setOverview(data)
+      if (data?.queryMode) setLiveMode(data.queryMode)
       if (data?.executive?.month && !month) {
         setSelectedMonth(data.executive.month)
       }
@@ -310,8 +449,36 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
+    api.get<any>('/api/settings/query-mode')
+      .then((d) => { if (d?.queryMode) setLiveMode(d.queryMode) })
+      .catch(() => {})
     loadOverview()
   }, [loadOverview])
+
+  useEffect(() => {
+    if (!overviewLoading && !refreshing) {
+      setElapsedSec(0)
+      return
+    }
+    const start = Date.now()
+    setElapsedSec(0)
+    const timer = window.setInterval(() => {
+      setElapsedSec((Date.now() - start) / 1000)
+    }, 100)
+    return () => window.clearInterval(timer)
+  }, [overviewLoading, refreshing])
+
+  async function switchToLocalMode() {
+    if (switchingMode) return
+    setSwitchingMode(true)
+    try {
+      await api.post('/api/settings/query-mode', { queryMode: 'local' })
+      window.location.reload()
+    } catch (e: any) {
+      setError(e?.message || '切换本地数据模式失败')
+      setSwitchingMode(false)
+    }
+  }
 
   async function onChangeMonth(m: string) {
     setSelectedMonth(m)
@@ -323,6 +490,8 @@ export default function Home() {
 
   const exec = overview?.executive
   const syncHealth = overview?.syncHealth
+  const activeQueryMode = overview?.queryMode || liveMode || 'local'
+  const isRealtime = activeQueryMode === 'realtime'
   const activeMonth = selectedMonth || exec?.month || ''
   const maxCustDebt = useMemo(
     () => Math.max(1, ...(exec?.topDebtCustomers || []).map((c) => c.totalDebt || 0)),
@@ -335,9 +504,9 @@ export default function Home() {
         <div className="dash-head-left">
           <h1>{greet}，{displayName}</h1>
           <div className="dash-status-strip">
-            <span className="status-dot ok" />
-            <span>{overview?.queryMode === 'realtime' ? '实时聚合模式' : '本地同步库'}</span>
-            {syncHealth?.lastSyncedAt && (
+            <span className={`status-dot ${isRealtime ? 'warn' : 'ok'}`} />
+            <span>{isRealtime ? '实时聚合模式' : '本地同步库'}</span>
+            {syncHealth?.lastSyncedAt && !isRealtime && (
               <>
                 <span className="muted">·</span>
                 <span>最近同步 {fmtSyncTime(syncHealth.lastSyncedAt)}</span>
@@ -392,10 +561,28 @@ export default function Home() {
 
       {error && <div className="error-banner">{error}</div>}
 
-      {overviewLoading && !exec ? (
-        <div className="dash-kpi-grid">
-          <CardSkeleton count={5} />
+      {refreshing && exec && (
+        <div className={`dash-load-banner compact${isRealtime ? ' realtime' : ''}`}>
+          <div className="dash-load-top">
+            <div className="dash-load-left">
+              <span className="dash-load-spinner" aria-hidden />
+              <div className="dash-load-title">
+                {isRealtime ? '正在实时拉取最新 U9 数据重新核算…' : '正在重新计算最新经营指标…'}
+                <span className="dash-load-timer mono">已等待 {elapsedSec.toFixed(1)}s</span>
+              </div>
+            </div>
+          </div>
         </div>
+      )}
+
+      {overviewLoading && !exec ? (
+        <DashboardLoadingView
+          isRealtime={isRealtime}
+          elapsedSec={elapsedSec}
+          isAdmin={isAdmin}
+          switchingMode={switchingMode}
+          onSwitchLocal={switchToLocalMode}
+        />
       ) : exec?.error ? (
         <EmptyState
           variant="data"
