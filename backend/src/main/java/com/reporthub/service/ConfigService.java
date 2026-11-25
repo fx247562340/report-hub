@@ -3,11 +3,13 @@ package com.reporthub.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reporthub.common.BizException;
 import com.reporthub.domain.*;
+import com.reporthub.engine.ReportRelationRegistry;
 import com.reporthub.repo.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -17,7 +19,6 @@ public class ConfigService {
     private final ApiEndpointRepo endpointRepo;
     private final DatasetRepo datasetRepo;
     private final FieldMappingRepo fieldMappingRepo;
-    private final RelationRepo relationRepo;
     private final ReportRepo reportRepo;
     private final ObjectMapper mapper;
     private final com.reporthub.engine.SessionAuthService sessionAuthService;
@@ -29,7 +30,6 @@ public class ConfigService {
                          ApiEndpointRepo endpointRepo,
                          DatasetRepo datasetRepo,
                          FieldMappingRepo fieldMappingRepo,
-                         RelationRepo relationRepo,
                          ReportRepo reportRepo,
                          ObjectMapper mapper,
                          com.reporthub.engine.SessionAuthService sessionAuthService,
@@ -40,7 +40,6 @@ public class ConfigService {
         this.endpointRepo = endpointRepo;
         this.datasetRepo = datasetRepo;
         this.fieldMappingRepo = fieldMappingRepo;
-        this.relationRepo = relationRepo;
         this.reportRepo = reportRepo;
         this.mapper = mapper;
         this.sessionAuthService = sessionAuthService;
@@ -332,25 +331,17 @@ public class ConfigService {
         resultCache.invalidateAll();
     }
 
-    // ---- relations ----
+    // ---- relations & lineage (read-only, code-managed) ----
     public List<RelationDef> listRelations(String reportCode) {
-        return relationRepo.findByReportCodeOrderBySortAsc(reportCode);
+        return ReportRelationRegistry.relationsFor(reportCode);
     }
 
-    @Transactional
-    public RelationDef saveRelation(RelationDef def) {
-        requireCode(def.getCode(), "关联");
-        def.setCode(def.getCode().trim());
-        def.setUpdatedAt(Instant.now());
-        RelationDef saved = relationRepo.save(def);
-        resultCache.invalidateAll();
-        return saved;
-    }
-
-    @Transactional
-    public void deleteRelation(String code) {
-        relationRepo.deleteById(code);
-        resultCache.invalidateAll();
+    public Map<String, Object> reportLineage(String reportCode) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("reportCode", reportCode);
+        out.put("relations", ReportRelationRegistry.relationsFor(reportCode));
+        out.put("builtin", ReportRelationRegistry.builtinLineageFor(reportCode));
+        return out;
     }
 
     // ---- reports ----
@@ -378,7 +369,6 @@ public class ConfigService {
 
     @Transactional
     public void deleteReport(String code) {
-        relationRepo.deleteByReportCode(code);
         reportRepo.deleteById(code);
         resultCache.invalidateReport(code);
     }

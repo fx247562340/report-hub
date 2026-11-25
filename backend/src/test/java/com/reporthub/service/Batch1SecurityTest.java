@@ -19,7 +19,7 @@ class Batch1SecurityTest {
     private ConfigService newConfigService() {
         ReportHubProperties props = new ReportHubProperties();
         return new ConfigService(
-                null, null, null, null, null, null,
+                null, null, null, null, null,
                 mapper,
                 new SessionAuthService(mapper),
                 null,

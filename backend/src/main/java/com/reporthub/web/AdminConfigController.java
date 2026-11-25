@@ -85,15 +85,9 @@ public class AdminConfigController {
         return ApiResponse.ok(configService.listRelations(code));
     }
 
-    @PostMapping("/relations")
-    public ApiResponse<RelationDef> saveRel(@RequestBody RelationDef def) {
-        return ApiResponse.ok(configService.saveRelation(def));
-    }
-
-    @DeleteMapping("/relations/{code}")
-    public ApiResponse<Void> delRel(@PathVariable String code) {
-        configService.deleteRelation(code);
-        return ApiResponse.ok(null);
+    @GetMapping("/reports/{code}/lineage")
+    public ApiResponse<Map<String, Object>> lineage(@PathVariable String code) {
+        return ApiResponse.ok(configService.reportLineage(code));
     }
 
     @GetMapping("/reports")

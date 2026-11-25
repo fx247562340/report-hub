@@ -1,52 +1,44 @@
 package com.reporthub.domain;
 
-import jakarta.persistence.*;
-import java.time.Instant;
-
-@Entity
-@Table(name = "relations")
+/**
+ * 报表多表关联规则定义（代码内置，不再落库存储）。
+ */
 public class RelationDef {
-    @Id
-    @Column(length = 64)
     private String code;
-
-    @Column(nullable = false, length = 64)
     private String reportCode;
-
-    @Column(nullable = false, length = 64)
     private String leftDataset;
-
-    @Column(nullable = false, length = 64)
     private String rightDataset;
-
     /** 1-1 | 1-N | N-1 | N-N */
-    @Column(nullable = false, length = 8)
     private String cardinality = "N-1";
-
-    /** left | inner */
-    @Column(nullable = false, length = 8)
+    /** left | inner | union */
     private String joinType = "left";
-
     /** JSON array: [{leftField, rightField}] */
-    @Column(nullable = false, columnDefinition = "text")
     private String onFields = "[]";
-
     /** dual_list | child_batch | child_lookup */
-    @Column(nullable = false, length = 16)
     private String fetchMode = "child_batch";
-
     /** JSON fetch strategy options */
-    @Column(columnDefinition = "text")
     private String fetchConfig = "{}";
-
     /** flat | nested — only for 1-N / N-N */
-    @Column(nullable = false, length = 8)
     private String expandMode = "flat";
-
     private Integer sort = 0;
 
-    @Column(nullable = false)
-    private Instant updatedAt = Instant.now();
+    public RelationDef() {}
+
+    public RelationDef(String code, String reportCode, String leftDataset, String rightDataset,
+                       String cardinality, String joinType, String onFields,
+                       String fetchMode, String fetchConfig, String expandMode, Integer sort) {
+        this.code = code;
+        this.reportCode = reportCode;
+        this.leftDataset = leftDataset;
+        this.rightDataset = rightDataset;
+        this.cardinality = cardinality;
+        this.joinType = joinType;
+        this.onFields = onFields;
+        this.fetchMode = fetchMode;
+        this.fetchConfig = fetchConfig;
+        this.expandMode = expandMode;
+        this.sort = sort;
+    }
 
     public String getCode() { return code; }
     public void setCode(String code) { this.code = code; }
@@ -70,6 +62,4 @@ public class RelationDef {
     public void setExpandMode(String expandMode) { this.expandMode = expandMode; }
     public Integer getSort() { return sort; }
     public void setSort(Integer sort) { this.sort = sort; }
-    public Instant getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }

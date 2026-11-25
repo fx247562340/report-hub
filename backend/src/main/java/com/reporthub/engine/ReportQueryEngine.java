@@ -24,7 +24,6 @@ public class ReportQueryEngine {
     private final ApiEndpointRepo endpointRepo;
     private final DatasetRepo datasetRepo;
     private final FieldMappingRepo fieldMappingRepo;
-    private final RelationRepo relationRepo;
     private final ReportHubProperties props;
     private final SyncStore syncStore;
     private final QueryModeService queryModeService;
@@ -39,7 +38,6 @@ public class ReportQueryEngine {
                              ApiEndpointRepo endpointRepo,
                              DatasetRepo datasetRepo,
                              FieldMappingRepo fieldMappingRepo,
-                             RelationRepo relationRepo,
                              ReportHubProperties props,
                              SyncStore syncStore,
                              QueryModeService queryModeService,
@@ -50,7 +48,6 @@ public class ReportQueryEngine {
         this.endpointRepo = endpointRepo;
         this.datasetRepo = datasetRepo;
         this.fieldMappingRepo = fieldMappingRepo;
-        this.relationRepo = relationRepo;
         this.props = props;
         this.syncStore = syncStore;
         this.queryModeService = queryModeService;
@@ -86,7 +83,7 @@ public class ReportQueryEngine {
 
         // 计算列筛选（如 是否一致）必须全量取数后本地过滤，否则只会滤到当前上游页
         boolean localCalcFilter = hasLocalCalcFilter(report, req.filters());
-        List<RelationDef> relations = relationRepo.findByReportCodeOrderBySortAsc(report.getCode());
+        List<RelationDef> relations = ReportRelationRegistry.relationsFor(report.getCode());
         // 分组报表与 union 关系都要全量取数后在内存里汇总/合并
         boolean hasGroup = hasGroupSpec(report);
         boolean hasUnion = relations.stream().anyMatch(r -> "union".equalsIgnoreCase(r.getJoinType()));

@@ -14,7 +14,7 @@ class LocalQueryOptimizationTest {
     @Test
     void preFilterRootNarrowsRowsByRootMonthAndStatusWhileSkippingCalcFields() {
         ReportQueryEngine engine = new ReportQueryEngine(
-                new ObjectMapper(), null, null, null, null, null, null, null, null, null, null);
+                new ObjectMapper(), null, null, null, null, null, null, null, null, null);
 
         ReportDef report = new ReportDef();
         report.setCode("rpt_white_weight_diff");

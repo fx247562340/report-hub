@@ -2913,13 +2913,6 @@ tbody tr:hover { background: rgba(255,255,255,.02); }
   margin-top: 1px;
 }
 
-.rel-detail-table {
-  overflow-x: auto;
-}
-.rel-detail-table table {
-  width: 100%;
-}
-
 .rel-inspector {
   position: sticky;
   top: 78px;

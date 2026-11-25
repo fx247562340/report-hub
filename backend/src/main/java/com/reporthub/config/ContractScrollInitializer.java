@@ -70,10 +70,11 @@ public class ContractScrollInitializer implements CommandLineRunner {
         }
     }
 
-    /** 清理已废弃的历史对象：dashboard_widgets 旧看板表、已下架的 ds_u9c_so / u9c_mo_so_contract */
+    /** 清理已废弃的历史对象：dashboard_widgets 旧看板表、relations 关系表（已迁入代码注册表）、已下架的 ds_u9c_so / u9c_mo_so_contract */
     private void cleanupObsoleteMetadata() {
         try {
             jdbc.execute("DROP TABLE IF EXISTS dashboard_widgets");
+            jdbc.execute("DROP TABLE IF EXISTS relations");
             jdbc.update("DELETE FROM sync_jobs WHERE dataset_code = 'ds_u9c_so'");
             jdbc.update("DELETE FROM sync_records WHERE dataset_code = 'ds_u9c_so'");
             jdbc.update("DELETE FROM sync_configs WHERE dataset_code = 'ds_u9c_so'");
