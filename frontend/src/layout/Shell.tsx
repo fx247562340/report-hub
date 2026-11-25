@@ -53,7 +53,13 @@ const ROUTE_META: Record<string, { group?: string; title: string }> = {
 }
 
 const SIDEBAR_KEY = 'report_hub_sidebar_collapsed'
-const NAV_GROUPS_KEY = 'report_hub_nav_groups'
+const NAV_GROUPS_KEY = 'report_hub_nav_groups_v2'
+
+const DEFAULT_GROUP_OPEN: Record<string, boolean> = {
+  analysis: true,
+  integration: false,
+  system: false,
+}
 
 function loadGroupOpenState(): Record<string, boolean> {
   try {
@@ -61,11 +67,11 @@ function loadGroupOpenState(): Record<string, boolean> {
     if (raw) {
       const parsed = JSON.parse(raw)
       if (parsed && typeof parsed === 'object') {
-        return { analysis: true, integration: true, system: true, ...parsed }
+        return { ...DEFAULT_GROUP_OPEN, ...parsed }
       }
     }
   } catch { /* ignore */ }
-  return { analysis: true, integration: true, system: true }
+  return { ...DEFAULT_GROUP_OPEN }
 }
 
 export default function Shell() {
