@@ -326,11 +326,41 @@ export default function AiChat() {
   }
 
   async function copyContent(id: string | number, text: string) {
-    try {
-      await navigator.clipboard.writeText(text)
+    let copied = false
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text)
+        copied = true
+      } catch {
+        copied = false
+      }
+    }
+    if (!copied) {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.setAttribute('readonly', '')
+      ta.style.position = 'fixed'
+      ta.style.top = '-9999px'
+      ta.style.left = '-9999px'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      ta.setSelectionRange(0, text.length)
+      try {
+        copied = document.execCommand('copy')
+      } catch {
+        copied = false
+      } finally {
+        document.body.removeChild(ta)
+      }
+    }
+    if (copied) {
       setCopiedId(id)
       setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1600)
-    } catch { /* ignore */ }
+    } else {
+      setPageError('当前浏览器阻止了剪贴板写入，请手动选中结果文本按 Ctrl/Cmd + C 复制')
+    }
   }
 
   const filteredSessions = useMemo(() => {
