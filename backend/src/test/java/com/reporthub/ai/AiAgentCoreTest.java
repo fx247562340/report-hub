@@ -144,4 +144,17 @@ class AiAgentCoreTest {
         assertEquals("客户B", snap.topAlerts().get(0).get("customerName"));
         assertEquals(-20.25, ((Number) snap.topAlerts().get(0).get("blackStock")).doubleValue(), 0.001);
     }
+
+    @Test
+    void hangReportDateNormalizationAndRealtimePassthroughRules() {
+        assertEquals("2026-11-26 23:59:59", AiToolExecutor.normalizeEndDateInclusive("2026-11-26"));
+        assertEquals("2026-11-26 18:00:00", AiToolExecutor.normalizeEndDateInclusive("2026-11-26 18:00:00"));
+        assertEquals("", AiToolExecutor.normalizeEndDateInclusive(""));
+
+        var today = java.time.LocalDate.of(2026, 11, 26);
+        assertTrue(AiToolExecutor.shouldUseRealtimeForRecentHang("2026-11-26", "2026-11-26", today));
+        assertTrue(AiToolExecutor.shouldUseRealtimeForRecentHang("2026-11-24", "2026-11-26", today));
+        assertFalse(AiToolExecutor.shouldUseRealtimeForRecentHang("2026-11-01", "2026-11-30", today));
+        assertFalse(AiToolExecutor.shouldUseRealtimeForRecentHang("2026-11-25", "2026-11-25", today));
+    }
 }

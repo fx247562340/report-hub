@@ -74,6 +74,10 @@ public class ReportQueryEngine {
     public record JoinPair(String leftField, String rightField) {}
 
     public QueryResult query(ReportDef report, QueryRequest req) {
+        return query(report, req, false);
+    }
+
+    public QueryResult query(ReportDef report, QueryRequest req, boolean forceRealtime) {
         if (ContractScrollService.REPORT_CODE.equals(report.getCode())) {
             return contractScrollService.queryAsEngineResult(req.filters(), req.page(), req.pageSize());
         }
@@ -92,8 +96,8 @@ public class ReportQueryEngine {
                 ? new QueryRequest(req.filters(), 1, Math.max(req.pageSize(), props.getEngine().getMaxRootRows()))
                 : req;
 
-        // 本地模式：只读 sync_records 原始行，映射/关联逻辑不变
-        if (queryModeService.isLocal()) {
+        // 本地模式：只读 sync_records 原始行，映射/关联逻辑不变（当 forceRealtime=true 时跳过本地直查上游）
+        if (!forceRealtime && queryModeService.isLocal()) {
             return queryLocal(report, req, trace, bundles, relations, t0);
         }
 

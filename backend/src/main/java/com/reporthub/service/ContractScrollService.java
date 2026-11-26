@@ -442,28 +442,36 @@ public class ContractScrollService {
             String asOf
     ) {}
 
+    public record U9InventoryRawData(List<ObjectNode> rows, String sourceMode, String asOf) {}
+
+    /** 读取 U9 实时现存量原始明细行（支持 local/realtime 双模与空库自动回退实时） */
+    public U9InventoryRawData loadU9InventoryRawData(boolean forceRealtime) {
+        boolean preferLocal = !forceRealtime && queryModeService.isLocal();
+        List<ObjectNode> rawRows = null;
+        String sourceMode = "realtime";
+        String asOf = Instant.now().toString();
+        if (preferLocal) {
+            List<ObjectNode> localRows = syncStore.loadRaw(WHQOH_DATASET);
+            if (!localRows.isEmpty()) {
+                rawRows = localRows;
+                sourceMode = "local";
+                Instant ts = syncStore.lastSyncedAt(WHQOH_DATASET);
+                if (ts != null) asOf = ts.toString();
+            }
+        }
+        if (rawRows == null) {
+            rawRows = fetchDatasetFromUpstream(WHQOH_DATASET, new ArrayList<>());
+            sourceMode = "realtime";
+            asOf = Instant.now().toString();
+        }
+        return new U9InventoryRawData(rawRows == null ? List.of() : rawRows, sourceMode, asOf);
+    }
+
     private U9InventorySnapshot loadU9InventorySnapshot() {
         try {
-            boolean preferLocal = queryModeService.isLocal();
-            List<ObjectNode> rawRows = null;
-            String sourceMode = "realtime";
-            String asOf = Instant.now().toString();
-            if (preferLocal) {
-                List<ObjectNode> localRows = syncStore.loadRaw(WHQOH_DATASET);
-                if (!localRows.isEmpty()) {
-                    rawRows = localRows;
-                    sourceMode = "local";
-                    Instant ts = syncStore.lastSyncedAt(WHQOH_DATASET);
-                    if (ts != null) asOf = ts.toString();
-                }
-            }
-            if (rawRows == null) {
-                rawRows = fetchDatasetFromUpstream(WHQOH_DATASET, new ArrayList<>());
-                sourceMode = "realtime";
-                asOf = Instant.now().toString();
-            }
-            if (rawRows == null || rawRows.isEmpty()) return null;
-            return summarizeWhQoh(rawRows, sourceMode, asOf);
+            U9InventoryRawData raw = loadU9InventoryRawData(false);
+            if (raw.rows().isEmpty()) return null;
+            return summarizeWhQoh(raw.rows(), raw.sourceMode(), raw.asOf());
         } catch (Exception e) {
             return null;
         }

@@ -2,11 +2,13 @@ package com.reporthub.ai;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.reporthub.domain.ReportDef;
 import com.reporthub.engine.ReportQueryEngine;
 import com.reporthub.repo.ReportRepo;
 import com.reporthub.service.ContractScrollService;
 import com.reporthub.service.DashboardService;
+import com.reporthub.service.QueryModeService;
 import com.reporthub.service.SyncService;
 import org.springframework.stereotype.Component;
 
@@ -16,6 +18,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 /**
@@ -40,6 +43,7 @@ public class AiToolExecutor {
     private final ReportQueryEngine queryEngine;
     private final ReportRepo reportRepo;
     private final SyncService syncService;
+    private final QueryModeService queryModeService;
     private final ObjectMapper mapper;
 
     public AiToolExecutor(DashboardService dashboardService,
@@ -47,12 +51,14 @@ public class AiToolExecutor {
                           ReportQueryEngine queryEngine,
                           ReportRepo reportRepo,
                           SyncService syncService,
+                          QueryModeService queryModeService,
                           ObjectMapper mapper) {
         this.dashboardService = dashboardService;
         this.contractScrollService = contractScrollService;
         this.queryEngine = queryEngine;
         this.reportRepo = reportRepo;
         this.syncService = syncService;
+        this.queryModeService = queryModeService;
         this.mapper = mapper;
     }
 
@@ -63,6 +69,7 @@ public class AiToolExecutor {
             case "compare_contract_months" -> "跨月经营对比";
             case "query_hang_report" -> "挂次生产与重量差异";
             case "query_cust_monthly_flow" -> "客户月度黑白件出入库";
+            case "query_u9_inventory" -> "U9 实时仓库现存量";
             case "get_sync_health" -> "数据同步状态巡检";
             default -> toolName;
         };
@@ -74,23 +81,24 @@ public class AiToolExecutor {
 
         tools.add(fn(
                 "get_executive_overview",
-                "获取指定月份的经营驾驶舱总览：包含当月白件发货(吨)、开票金额(元)、回款金额(元)、期末总欠款(元)、期末在制库存(吨)及其环比变化、近6个月趋势、客户欠款Top8与负库存预警数。",
+                "获取指定月份的经营驾驶舱总览：包含当月白件发货(吨)、开票金额(元)、回款金额(元)、期末总欠款(元)、U9实时在制库存(吨)及其环比变化、近6个月趋势、客户欠款Top8与U9负库存预警数。",
                 Map.of("month", prop("string", "统计月份，格式 YYYY-MM，例如 2026-11；不填则默认当前最新月份")),
                 List.of()
         ));
 
+        Map<String, Object> scrollProps = new LinkedHashMap<>();
+        scrollProps.put("month", prop("string", "统计月份，格式 YYYY-MM，默认当前最新月份"));
+        scrollProps.put("customerKeyword", prop("string", "客户名称或简称关键词（支持模糊匹配，如“华泰”“顺达”）"));
+        scrollProps.put("contractNo", prop("string", "纸质合同号或项目号关键词"));
+        scrollProps.put("productKeyword", prop("string", "可选，产品名称关键词（如“钢结构”“支架”）"));
+        scrollProps.put("onlyNegativeStock", prop("boolean", "是否仅筛选出现黑件或白件负库存的异常合同"));
+        scrollProps.put("onlyDebt", prop("boolean", "是否仅筛选期末总欠款大于0的合同"));
+        scrollProps.put("sortBy", propEnum("排序指标", List.of("end_total_debt", "cur_white_ship", "cur_inv_amt", "cur_pay_amt", "end_black_stock", "end_white_stock")));
+        scrollProps.put("limit", prop("integer", "返回明细条数上限，默认 12，最大 20"));
         tools.add(fn(
                 "query_contract_scroll",
-                "查询《销售合同滚动统计报表》明细与汇总：支持按客户简称(自动模糊匹配)、合同号、仅看欠款、仅看黑白件负库存筛选，并由后端计算合计值与Top排序。",
-                Map.of(
-                        "month", prop("string", "统计月份，格式 YYYY-MM，默认当前最新月份"),
-                        "customerKeyword", prop("string", "客户名称或简称关键词（支持模糊匹配，如“华泰”“顺达”）"),
-                        "contractNo", prop("string", "纸质合同号或项目号关键词"),
-                        "onlyNegativeStock", prop("boolean", "是否仅筛选出现黑件或白件负库存的异常合同"),
-                        "onlyDebt", prop("boolean", "是否仅筛选期末总欠款大于0的合同"),
-                        "sortBy", propEnum("排序指标", List.of("end_total_debt", "cur_white_ship", "cur_inv_amt", "cur_pay_amt", "end_black_stock", "end_white_stock")),
-                        "limit", prop("integer", "返回明细条数上限，默认 12，最大 20")
-                ),
+                "查询《销售合同滚动统计报表》明细与汇总：支持按客户简称(自动模糊匹配)、合同号、产品名称、仅看欠款、仅看黑白件负库存筛选，并由后端计算合计值与Top排序。",
+                scrollProps,
                 List.of()
         ));
 
@@ -107,37 +115,57 @@ public class AiToolExecutor {
                 List.of("monthA", "monthB")
         ));
 
+        Map<String, Object> hangProps = new LinkedHashMap<>();
+        hangProps.put("reportType", propEnum("报表类型：daily=挂次日报表，weight_diff=白件重量差异表", List.of("daily", "weight_diff")));
+        hangProps.put("month", prop("string", "按月查询，格式 YYYY-MM（与 startDate/endDate 二选一）"));
+        hangProps.put("startDate", prop("string", "开始日期 YYYY-MM-DD（查当天时 startDate 和 endDate 均填当天日期）"));
+        hangProps.put("endDate", prop("string", "结束日期 YYYY-MM-DD（包含该日全天，查当天会自动实时直查 MES）"));
+        hangProps.put("customerKeyword", prop("string", "可选，客户简称关键词"));
+        hangProps.put("itemCode", prop("string", "可选，物料编码关键词（如 1104057-0004、1205057-0005）"));
+        hangProps.put("productKeyword", prop("string", "可选，产品名称关键词（如 钢结构、电缆沟支架）"));
+        hangProps.put("workStatus", propEnum("可选，挂次状态筛选：12=白件已称重，5=已完成，4=已浸锌，3=已称重，2=已酸洗，1=未酸洗", List.of("12", "5", "4", "3", "2", "1")));
+        hangProps.put("onlyAbnormal", prop("boolean", "是否仅看异常记录（weight_diff 时为重量不一致；daily 时为铁损或锌耗异常）"));
+        hangProps.put("limit", prop("integer", "返回明细条数上限，默认 12，最大 20"));
         tools.add(fn(
                 "query_hang_report",
-                "查询生产挂次报表：reportType=daily 查《挂次日报表》（铁损/锌耗/锌层厚度异常与产线产量），reportType=weight_diff 查《挂次白件重量差异表》（MES称重与U9完工/入库重量超差对比）。",
-                Map.of(
-                        "reportType", propEnum("报表类型：daily=挂次日报表，weight_diff=白件重量差异表", List.of("daily", "weight_diff")),
-                        "month", prop("string", "按月查询，格式 YYYY-MM（与 startDate/endDate 二选一）"),
-                        "startDate", prop("string", "开始日期 YYYY-MM-DD"),
-                        "endDate", prop("string", "结束日期 YYYY-MM-DD"),
-                        "customerKeyword", prop("string", "可选，客户简称关键词"),
-                        "onlyAbnormal", prop("boolean", "是否仅看异常记录（weight_diff 时为重量不一致；daily 时为铁损或锌耗异常）"),
-                        "limit", prop("integer", "返回明细条数上限，默认 12，最大 20")
-                ),
+                "查询生产挂次报表（含物料编码 item_code、白件/黑件重量 kg 与吨位）：reportType=daily 查《挂次日报表》，reportType=weight_diff 查《挂次白件重量差异表》；查今日或近3天会自动实时穿透 MES 获取最新挂次。",
+                hangProps,
                 List.of("reportType")
         ));
 
+        Map<String, Object> flowProps = new LinkedHashMap<>();
+        flowProps.put("direction", propEnum("方向：in=黑件入库，out=白件出库", List.of("in", "out")));
+        flowProps.put("month", prop("string", "统计月份 YYYY-MM，默认当前最新月"));
+        flowProps.put("customerKeyword", prop("string", "可选，客户简称关键词"));
+        flowProps.put("itemCode", prop("string", "可选，料号关键词（如 1104057-0004）"));
+        flowProps.put("productKeyword", prop("string", "可选，料品名称关键词"));
+        flowProps.put("projectNo", prop("string", "可选，项目号/合同号关键词（仅白件出库表有项目号）"));
+        flowProps.put("limit", prop("integer", "返回客户/料品排行条数，默认 12，最大 20"));
         tools.add(fn(
                 "query_cust_monthly_flow",
-                "查询客户月度出入库汇总：direction=in 查《客户月度黑件入库表》(来料吨位)，direction=out 查《客户月度白件出库表》(成品发货吨位)，自动按客户汇总排行。",
-                Map.of(
-                        "direction", propEnum("方向：in=黑件入库，out=白件出库", List.of("in", "out")),
-                        "month", prop("string", "统计月份 YYYY-MM，默认当前最新月"),
-                        "customerKeyword", prop("string", "可选，客户简称关键词"),
-                        "limit", prop("integer", "返回客户排行条数，默认 12，最大 20")
-                ),
+                "查询客户月度出入库汇总：direction=in 查《客户月度黑件入库表》(来料吨位)，direction=out 查《客户月度白件出库表》(成品发货吨位)，支持按客户、料号、料品、项目号筛选并自动汇总排行。",
+                flowProps,
                 List.of("direction")
+        ));
+
+        Map<String, Object> invProps = new LinkedHashMap<>();
+        invProps.put("warehouse", propEnum("仓库筛选：ALL=全部(BF003+BF004)，BF003=黑件客供原材料库，BF004=白件镀锌成品库", List.of("ALL", "BF003", "BF004")));
+        invProps.put("customerKeyword", prop("string", "可选，客户名称或简称关键词"));
+        invProps.put("itemCode", prop("string", "可选，物料编码关键词（如 1205057-0005、1104001-0001）"));
+        invProps.put("productKeyword", prop("string", "可选，物料名称关键词"));
+        invProps.put("onlyNegative", prop("boolean", "是否仅查看负库存异常物料"));
+        invProps.put("limit", prop("integer", "返回明细条数上限，默认 15，最大 30"));
+        tools.add(fn(
+                "query_u9_inventory",
+                "查询 U9 ERP 当前真实仓库现存量（WhQoh，BF003 黑件库与 BF004 白件库）：支持按仓库、客户、料号、产品名称或仅负库存筛选，返回准确现存吨位与负库存清单。",
+                invProps,
+                List.of()
         ));
 
         if (includeAdminTools) {
             tools.add(fn(
                     "get_sync_health",
-                    "巡检 13 张本地同步表的运行状态：查看启用数、本地行数、最近同步时间以及是否存在同步失败的异常表（仅管理员可用）。",
+                    "巡检所有本地同步表的运行状态：查看启用数、本地行数、最近同步时间以及是否存在同步失败的异常表（仅管理员可用）。",
                     Map.of(),
                     List.of()
             ));
@@ -160,6 +188,7 @@ public class AiToolExecutor {
             case "compare_contract_months" -> runCompareMonths(args);
             case "query_hang_report" -> runHangReport(args);
             case "query_cust_monthly_flow" -> runCustFlow(args);
+            case "query_u9_inventory" -> runU9Inventory(args);
             case "get_sync_health" -> {
                 if (!isAdmin) {
                     yield new ToolResult(toolName, displayLabelOf(toolName), "无权限访问同步巡检",
@@ -206,6 +235,7 @@ public class AiToolExecutor {
         String month = optText(args, "month", latestMonth());
         String custKw = optText(args, "customerKeyword", "");
         String contractNo = optText(args, "contractNo", "");
+        String prodKw = optText(args, "productKeyword", "");
         boolean onlyNeg = args.path("onlyNegativeStock").asBoolean(false);
         boolean onlyDebt = args.path("onlyDebt").asBoolean(false);
         String sortBy = optText(args, "sortBy", onlyNeg ? "end_black_stock" : "end_total_debt");
@@ -235,6 +265,10 @@ public class AiToolExecutor {
                 String pno = str(r.get("u9_project_no")).toLowerCase(Locale.ROOT);
                 String kw = contractNo.toLowerCase(Locale.ROOT);
                 if (!cno.contains(kw) && !pno.contains(kw)) continue;
+            }
+            if (!prodKw.isBlank()) {
+                String pn = str(r.get("product_name")).toLowerCase(Locale.ROOT);
+                if (!pn.contains(prodKw.toLowerCase(Locale.ROOT))) continue;
             }
             if (onlyNeg) {
                 double bs = num(r.get("end_black_stock"));
@@ -419,6 +453,9 @@ public class AiToolExecutor {
         String startDate = optText(args, "startDate", "");
         String endDate = optText(args, "endDate", "");
         String custKw = optText(args, "customerKeyword", "");
+        String itemCodeKw = optText(args, "itemCode", "");
+        String prodKw = optText(args, "productKeyword", "");
+        String workStatus = optText(args, "workStatus", "");
         boolean onlyAbnormal = args.path("onlyAbnormal").asBoolean(false);
         int limit = clamp(args.path("limit").asInt(12), 1, 20);
 
@@ -428,12 +465,12 @@ public class AiToolExecutor {
                     Map.of("error", "未找到报表: " + reportCode), List.of());
         }
 
-        // 默认查近 30 天或当月，防止全表扫描无意义
+        // 默认查近 14 天或当月，防止全表扫描无意义
+        LocalDate today = LocalDate.now();
         if (month.isBlank() && startDate.isBlank() && endDate.isBlank()) {
             if (isDiff) {
                 month = latestMonth();
             } else {
-                LocalDate today = LocalDate.now();
                 startDate = today.minusDays(14).toString();
                 endDate = today.toString();
             }
@@ -445,20 +482,44 @@ public class AiToolExecutor {
                 endDate = ym.atEndOfMonth().toString();
             } catch (Exception ignored) {}
         }
+        if (!startDate.isBlank() && endDate.isBlank()) endDate = startDate;
+        if (startDate.isBlank() && !endDate.isBlank()) startDate = endDate;
 
+        // 对齐 ReportRun.tsx：date-only 结束日必须补 23:59:59，否则 MES hangEndTimeFinish 与本地引擎均不含当天
         Map<String, Object> filters = new LinkedHashMap<>();
         if (!startDate.isBlank() || !endDate.isBlank()) {
             Map<String, Object> range = new LinkedHashMap<>();
             if (!startDate.isBlank()) range.put("start", startDate);
-            if (!endDate.isBlank()) range.put("end", endDate);
+            if (!endDate.isBlank()) range.put("end", normalizeEndDateInclusive(endDate));
             filters.put("endImmersionTime", range);
+        }
+        if (!workStatus.isBlank()) {
+            filters.put("work_status", workStatus);
         }
         if (isDiff && onlyAbnormal) {
             filters.put("diff_flag", "不一致");
         }
 
-        ReportQueryEngine.QueryResult qr = queryEngine.query(report, new ReportQueryEngine.QueryRequest(filters, 1, 5000));
+        // 当查询范围包含今日且跨度 <= 3 天时，即使全局在本地模式也自动穿透 MES 实时查询，避免当天尚未同步导致 0 挂
+        boolean forceRealtime = shouldUseRealtimeForRecentHang(startDate, endDate, today);
+        String actualDataMode = (forceRealtime || !queryModeService.isLocal()) ? "realtime" : "local";
+        ReportQueryEngine.QueryResult qr;
+        try {
+            qr = queryEngine.query(report, new ReportQueryEngine.QueryRequest(filters, 1, 5000), forceRealtime);
+        } catch (Exception e) {
+            if (forceRealtime && queryModeService.isLocal()) {
+                qr = queryEngine.query(report, new ReportQueryEngine.QueryRequest(filters, 1, 5000), false);
+                actualDataMode = "local";
+            } else {
+                throw e;
+            }
+        }
         List<Map<String, Object>> rows = qr.rows() == null ? List.of() : qr.rows();
+
+        // weight_diff 的过滤器 op=month，本地模式会返回整月行；若调用方显式指定了更窄的日区间则补一层日期裁剪
+        String startDay10 = day10(startDate);
+        String endDay10 = day10(endDate);
+        boolean narrowDateClip = isDiff && !startDay10.isEmpty() && !endDay10.isEmpty();
 
         EntityResolver.Resolution res = null;
         Set<String> allowedCust = null;
@@ -468,12 +529,29 @@ public class AiToolExecutor {
             allowedCust = new HashSet<>(res.matched());
         }
 
+        String itemKwLower = itemCodeKw.trim().toLowerCase(Locale.ROOT);
+        String prodKwLower = prodKw.trim().toLowerCase(Locale.ROOT);
+
         List<Map<String, Object>> filtered = new ArrayList<>();
         int abnormalCnt = 0;
         double totalWhiteKg = 0;
         double totalBlackKg = 0;
         for (Map<String, Object> r : rows) {
+            if (narrowDateClip) {
+                String rd = day10(str(r.get("hang_end_time")));
+                if (rd.isEmpty()) rd = day10(str(r.get("work_date")));
+                if (!rd.isEmpty() && (rd.compareTo(startDay10) < 0 || rd.compareTo(endDay10) > 0)) continue;
+            }
             if (allowedCust != null && !allowedCust.contains(str(r.get("customer_name")))) continue;
+            if (!itemKwLower.isEmpty()) {
+                String ic = str(r.get("item_code")).toLowerCase(Locale.ROOT);
+                String pn = str(r.get("product_no")).toLowerCase(Locale.ROOT);
+                if (!ic.contains(itemKwLower) && !pn.contains(itemKwLower)) continue;
+            }
+            if (!prodKwLower.isEmpty()) {
+                String pName = str(r.get("product_name")).toLowerCase(Locale.ROOT);
+                if (!pName.contains(prodKwLower)) continue;
+            }
             boolean abn = isDiff
                     ? "不一致".equals(str(r.get("diff_flag")))
                     : (!isBlankOrNormal(str(r.get("iron_abnormal"))) || !isBlankOrNormal(str(r.get("zinc_abnormal"))));
@@ -497,8 +575,12 @@ public class AiToolExecutor {
             Map<String, Object> slim = new LinkedHashMap<>();
             slim.put("hang_no", str(r.get("hang_no")));
             slim.put("work_date", str(r.get("work_date")));
+            slim.put("prod_status", str(r.get("prod_status")));
             slim.put("customer_name", str(r.get("customer_name")));
+            slim.put("item_code", str(r.get("item_code")));
             slim.put("product_name", str(r.get("product_name")));
+            String cno = str(r.get("contract_no"));
+            if (!cno.isEmpty()) slim.put("contract_no", cno);
             slim.put("white_weight_kg", round2(num(r.get("white_weight"))));
             if (isDiff) {
                 slim.put("u9_complete_kg", round2(num(r.get("u9_complete_kg"))));
@@ -507,6 +589,7 @@ public class AiToolExecutor {
                 slim.put("diff_flag", str(r.get("diff_flag")));
             } else {
                 slim.put("line_name", str(r.get("line_name")));
+                slim.put("hang_end_time", str(r.get("hang_end_time")));
                 slim.put("black_weight_kg", round2(num(r.get("black_weight"))));
                 slim.put("iron_loss", r.get("iron_loss"));
                 slim.put("iron_abnormal", str(r.get("iron_abnormal")));
@@ -520,26 +603,32 @@ public class AiToolExecutor {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("reportName", report.getName());
         payload.put("dateRange", startDate + " ~ " + endDate);
+        payload.put("dataMode", actualDataMode);
+        if ("local".equals(actualDataMode) && !endDay10.isEmpty() && endDay10.compareTo(today.toString()) >= 0) {
+            payload.put("dataNote", "当前为本地同步库历史数据（每日凌晨定时同步），如需当日最新挂次请缩小日期至近 3 天内或切换「实时聚合」模式。");
+        }
         if (res != null) {
             payload.put("customerResolution", Map.of(
                     "query", res.query(), "matched", res.matched(),
                     "ambiguous", res.ambiguous(), "suggestions", res.suggestions()
             ));
         }
-        payload.put("summary", Map.of(
-                "matchedHangCount", filtered.size(),
-                "abnormalCount", abnormalCnt,
-                "totalWhiteWeightKg", round2(totalWhiteKg),
-                "totalWhiteWeightTon", round2(totalWhiteKg / 1000.0),
-                "totalBlackWeightKg", round2(totalBlackKg)
-        ));
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("matchedHangCount", filtered.size());
+        summary.put("abnormalCount", abnormalCnt);
+        summary.put("totalWhiteWeightKg", round2(totalWhiteKg));
+        summary.put("totalWhiteWeightTon", round2(totalWhiteKg / 1000.0));
+        summary.put("totalBlackWeightKg", round2(totalBlackKg));
+        summary.put("totalBlackWeightTon", round2(totalBlackKg / 1000.0));
+        payload.put("summary", summary);
         payload.put("topRows", topRows);
 
         List<DrillLink> links = List.of(
                 new DrillLink("打开《" + report.getName() + "》", "/reports/" + reportCode)
         );
+        String tag = "realtime".equals(actualDataMode) ? " · 实时" : "";
         return new ToolResult("query_hang_report", report.getName(),
-                startDate + "~" + endDate + " 共 " + filtered.size() + " 挂", payload, links);
+                startDate + "~" + endDate + " 共 " + filtered.size() + " 挂" + tag, payload, links);
     }
 
     private ToolResult runCustFlow(JsonNode args) {
@@ -548,6 +637,9 @@ public class AiToolExecutor {
         String reportCode = isOut ? "rpt_cust_month_out" : "rpt_cust_month_in";
         String month = optText(args, "month", latestMonth());
         String custKw = optText(args, "customerKeyword", "");
+        String itemCodeKw = optText(args, "itemCode", "");
+        String prodKw = optText(args, "productKeyword", "");
+        String projKw = optText(args, "projectNo", "");
         int limit = clamp(args.path("limit").asInt(12), 1, 20);
 
         ReportDef report = reportRepo.findById(reportCode).orElse(null);
@@ -572,13 +664,25 @@ public class AiToolExecutor {
             allowedCust = new HashSet<>(res.matched());
         }
 
+        String itemKwLower = itemCodeKw.trim().toLowerCase(Locale.ROOT);
+        String prodKwLower = prodKw.trim().toLowerCase(Locale.ROOT);
+        String projKwLower = projKw.trim().toLowerCase(Locale.ROOT);
+
         Map<String, double[]> byCust = new LinkedHashMap<>();
+        List<Map<String, Object>> matchedItems = new ArrayList<>();
         double totalQty = 0;
         long totalCnt = 0;
         for (Map<String, Object> r : rows) {
             String cust = str(r.get("customer"));
             if (cust.isBlank()) cust = "未知客户";
             if (allowedCust != null && !allowedCust.contains(cust)) continue;
+            String ic = str(r.get("item_code"));
+            String prod = str(r.get("product"));
+            String proj = str(r.get("project_no"));
+            if (!itemKwLower.isEmpty() && !ic.toLowerCase(Locale.ROOT).contains(itemKwLower)) continue;
+            if (!prodKwLower.isEmpty() && !prod.toLowerCase(Locale.ROOT).contains(prodKwLower)) continue;
+            if (!projKwLower.isEmpty() && !proj.toLowerCase(Locale.ROOT).contains(projKwLower)) continue;
+
             double q = num(r.get(qtyKey));
             double c = num(r.get(cntKey));
             totalQty += q;
@@ -586,6 +690,15 @@ public class AiToolExecutor {
             double[] acc = byCust.computeIfAbsent(cust, k -> new double[2]);
             acc[0] += q;
             acc[1] += c;
+
+            Map<String, Object> itemRow = new LinkedHashMap<>();
+            itemRow.put("customer", cust);
+            if (!proj.isEmpty()) itemRow.put("project_no", proj);
+            itemRow.put("item_code", ic);
+            itemRow.put("product", prod);
+            itemRow.put("qty_ton", round2(q));
+            itemRow.put("doc_count", Math.round(c));
+            matchedItems.add(itemRow);
         }
 
         List<Map<String, Object>> ranking = byCust.entrySet().stream()
@@ -599,9 +712,13 @@ public class AiToolExecutor {
                     return m;
                 }).toList();
 
+        matchedItems.sort((a, b) -> Double.compare(num(b.get("qty_ton")), num(a.get("qty_ton"))));
+        List<Map<String, Object>> topItems = matchedItems.stream().limit(limit).toList();
+
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("reportName", report.getName());
         payload.put("month", month);
+        payload.put("dataMode", queryModeService.mode());
         if (res != null) {
             payload.put("customerResolution", Map.of(
                     "query", res.query(), "matched", res.matched(),
@@ -610,16 +727,158 @@ public class AiToolExecutor {
         }
         payload.put("summary", Map.of(
                 "customerCount", byCust.size(),
+                "itemRowCount", matchedItems.size(),
                 "totalQtyTon", round2(totalQty),
                 "totalDocCount", totalCnt
         ));
         payload.put("topCustomers", ranking);
+        payload.put("topItems", topItems);
 
         List<DrillLink> links = List.of(
                 new DrillLink("打开《" + report.getName() + "》", "/reports/" + reportCode)
         );
         return new ToolResult("query_cust_monthly_flow", report.getName(),
                 month + " 共 " + round2(totalQty) + " 吨", payload, links);
+    }
+
+    private ToolResult runU9Inventory(JsonNode args) {
+        String whFilter = optText(args, "warehouse", "ALL").toUpperCase(Locale.ROOT);
+        String custKw = optText(args, "customerKeyword", "");
+        String itemCodeKw = optText(args, "itemCode", "");
+        String prodKw = optText(args, "productKeyword", "");
+        boolean onlyNeg = args.path("onlyNegative").asBoolean(false);
+        int limit = clamp(args.path("limit").asInt(15), 1, 30);
+
+        ContractScrollService.U9InventoryRawData raw = contractScrollService.loadU9InventoryRawData(false);
+        List<Map<String, Object>> allItems = new ArrayList<>();
+        for (ObjectNode n : raw.rows()) {
+            String wh = pathText(n, "Wh", "Code").toUpperCase(Locale.ROOT);
+            if (!"BF003".equals(wh) && !"BF004".equals(wh)) continue;
+            if (!"ALL".equals(whFilter) && !whFilter.equals(wh)) continue;
+            String uom = pathText(n, "StoreUOM", "Name");
+            double rawQty = num(n.path("StoreQty").asText("0"));
+            Double tonQty = toInventoryTons(rawQty, uom);
+            if (tonQty == null) continue;
+
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("wh_code", wh);
+            item.put("wh_name", pathText(n, "Wh", "Name"));
+            item.put("customer_name", pathText(n, "ItemInfo", "ItemID", "MainItemCategory", "Name"));
+            item.put("item_code", pathText(n, "ItemInfo", "ItemCode"));
+            item.put("product_name", pathText(n, "ItemInfo", "ItemName"));
+            String proj = pathText(n, "Project", "Code");
+            if (!proj.isEmpty()) item.put("project_no", proj);
+            item.put("qty_ton", round2(tonQty));
+            allItems.add(item);
+        }
+
+        EntityResolver.Resolution res = null;
+        Set<String> allowedCust = null;
+        if (!custKw.isBlank()) {
+            List<String> universe = allItems.stream()
+                    .map(r -> str(r.get("customer_name")))
+                    .filter(s -> !s.isBlank())
+                    .distinct()
+                    .toList();
+            res = EntityResolver.resolve(custKw, universe);
+            allowedCust = new HashSet<>(res.matched());
+        }
+
+        String itemKwLower = itemCodeKw.trim().toLowerCase(Locale.ROOT);
+        String prodKwLower = prodKw.trim().toLowerCase(Locale.ROOT);
+
+        List<Map<String, Object>> filtered = new ArrayList<>();
+        double blackTon = 0, whiteTon = 0;
+        int negCnt = 0;
+        for (Map<String, Object> item : allItems) {
+            if (allowedCust != null && !allowedCust.contains(str(item.get("customer_name")))) continue;
+            if (!itemKwLower.isEmpty() && !str(item.get("item_code")).toLowerCase(Locale.ROOT).contains(itemKwLower)) continue;
+            if (!prodKwLower.isEmpty() && !str(item.get("product_name")).toLowerCase(Locale.ROOT).contains(prodKwLower)) continue;
+            double q = num(item.get("qty_ton"));
+            if (onlyNeg && q >= -0.001) continue;
+            if (Math.abs(q) < 0.001 && itemKwLower.isEmpty() && custKw.isBlank()) continue;
+            if (q < -0.001) negCnt++;
+            if ("BF003".equals(item.get("wh_code"))) blackTon += q;
+            else whiteTon += q;
+            filtered.add(item);
+        }
+
+        if (onlyNeg) {
+            filtered.sort(Comparator.comparingDouble(m -> num(m.get("qty_ton"))));
+        } else {
+            filtered.sort((a, b) -> Double.compare(Math.abs(num(b.get("qty_ton"))), Math.abs(num(a.get("qty_ton")))));
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "U9 ERP WhQoh (BF003 黑件 / BF004 白件)");
+        payload.put("dataMode", raw.sourceMode());
+        payload.put("asOf", raw.asOf());
+        if (res != null) {
+            payload.put("customerResolution", Map.of(
+                    "query", res.query(), "matched", res.matched(),
+                    "ambiguous", res.ambiguous(), "suggestions", res.suggestions()
+            ));
+        }
+        payload.put("summary", Map.of(
+                "matchedItemCount", filtered.size(),
+                "negativeCount", negCnt,
+                "blackStockTon", round2(blackTon),
+                "whiteStockTon", round2(whiteTon),
+                "totalStockTon", round2(blackTon + whiteTon)
+        ));
+        payload.put("topItems", filtered.stream().limit(limit).toList());
+
+        List<DrillLink> links = List.of(new DrillLink("返回经营看板查看实时库存", "/"));
+        return new ToolResult("query_u9_inventory", "U9 实时仓库现存量",
+                "匹配 " + filtered.size() + " 条 · 合计 " + round2(blackTon + whiteTon) + " 吨", payload, links);
+    }
+
+    /** 将 YYYY-MM-DD 结束日期补齐 23:59:59，确保 MES 上游与本地引擎均包含结束日全天 */
+    static String normalizeEndDateInclusive(String endDate) {
+        if (endDate == null) return "";
+        String s = endDate.trim();
+        if (s.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            return s + " 23:59:59";
+        }
+        return s;
+    }
+
+    /** 判断挂次查询是否应自动穿透 MES 实时接口（包含今日且日期跨度 <= 3 天） */
+    static boolean shouldUseRealtimeForRecentHang(String startDate, String endDate, LocalDate today) {
+        String s10 = day10(startDate);
+        String e10 = day10(endDate);
+        if (s10.isEmpty() || e10.isEmpty()) return false;
+        try {
+            LocalDate sd = LocalDate.parse(s10);
+            LocalDate ed = LocalDate.parse(e10);
+            if (ed.isBefore(today)) return false;
+            long spanDays = ChronoUnit.DAYS.between(sd, ed);
+            return spanDays >= 0 && spanDays <= 3;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static String day10(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        return t.length() >= 10 && t.substring(0, 10).matches("\\d{4}-\\d{2}-\\d{2}") ? t.substring(0, 10) : "";
+    }
+
+    private static String pathText(JsonNode root, String... keys) {
+        JsonNode cur = root;
+        for (String k : keys) {
+            if (cur == null || cur.isMissingNode() || cur.isNull()) return "";
+            cur = cur.path(k);
+        }
+        return cur == null || cur.isMissingNode() || cur.isNull() ? "" : cur.asText("").trim();
+    }
+
+    private static Double toInventoryTons(double qty, String uom) {
+        String u = uom == null ? "" : uom.trim().toLowerCase(Locale.ROOT);
+        if (u.isEmpty() || "吨".equals(u) || "t".equals(u) || "ton".equals(u) || "tons".equals(u)) return qty;
+        if ("公斤".equals(u) || "千克".equals(u) || "kg".equals(u)) return qty / 1000.0;
+        return null;
     }
 
     private ToolResult runSyncHealth() {
