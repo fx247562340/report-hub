@@ -109,4 +109,39 @@ class AiAgentCoreTest {
         assertEquals("stop", skipped.finishReason());
         assertTrue(skipped.toolCalls().isEmpty());
     }
+
+    @Test
+    void contractScrollSummarizesU9WhQohWithUnitConversionAndNegatives() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        var rows = List.of(
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"Wh":{"Code":"BF003","Name":"镀锌客供原材料库"},"ItemInfo":{"ItemCode":"1205001","ItemName":"钢结构","ItemID":{"MainItemCategory":{"Name":"客户A"}}},"StoreUOM":{"Name":"吨"},"StoreQty":"100.5"}
+                        """),
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"Wh":{"Code":"BF003","Name":"镀锌客供原材料库"},"ItemInfo":{"ItemCode":"1205002","ItemName":"支架","ItemID":{"MainItemCategory":{"Name":"客户B"}}},"StoreUOM":{"Name":"吨"},"StoreQty":"-20.25"}
+                        """),
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"Wh":{"Code":"BF003","Name":"镀锌客供原材料库"},"ItemInfo":{"ItemCode":"1205003","ItemName":"小件","ItemID":{"MainItemCategory":{"Name":"客户C"}}},"StoreUOM":{"Name":"公斤"},"StoreQty":"500"}
+                        """),
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"Wh":{"Code":"BF003","Name":"镀锌客供原材料库"},"ItemInfo":{"ItemCode":"1205004","ItemName":"预埋件","ItemID":{"MainItemCategory":{"Name":"客户D"}}},"StoreUOM":{"Name":"批"},"StoreQty":"10"}
+                        """),
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"Wh":{"Code":"BF004","Name":"镀锌成品库"},"ItemInfo":{"ItemCode":"1104001","ItemName":"成品塔筒","ItemID":{"MainItemCategory":{"Name":"客户E"}}},"StoreUOM":{"Name":"吨"},"StoreQty":"300.75"}
+                        """),
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"Wh":{"Code":"BF001","Name":"其他库"},"ItemInfo":{"ItemCode":"999","ItemName":"锌锭"},"StoreUOM":{"Name":"吨"},"StoreQty":"999"}
+                        """)
+        );
+
+        var snap = com.reporthub.service.ContractScrollService.summarizeWhQoh(rows, "local", "2026-11-26T00:00:00Z");
+        assertEquals(80.75, snap.blackTon(), 0.001); // 100.5 - 20.25 + 0.5 (500kg), skipping 批 and BF001
+        assertEquals(300.75, snap.whiteTon(), 0.001);
+        assertEquals(381.50, snap.totalTon(), 0.001);
+        assertEquals(1, snap.negativeTotal());
+        assertEquals(1, snap.blackNegativeCount());
+        assertEquals(0, snap.whiteNegativeCount());
+        assertEquals("客户B", snap.topAlerts().get(0).get("customerName"));
+        assertEquals(-20.25, ((Number) snap.topAlerts().get(0).get("blackStock")).doubleValue(), 0.001);
+    }
 }

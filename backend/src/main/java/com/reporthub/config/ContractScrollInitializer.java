@@ -287,6 +287,24 @@ public class ContractScrollInitializer implements CommandLineRunner {
                   "PageIndex": {{page}}
                 }
                 """, "ds_u9c_arapply_l", "U9应收核销明细行", 2000, 5, null, "02:38");
+
+        upsertU9ListDataset("u9c_whqoh", "U9仓库实时现存量(BF003/BF004)", """
+                {
+                  "EntityFullName": "UFIDA.U9.InvTrans.WhQoh.WhQoh",
+                  "ReturnFields": [
+                    "ID", "Wh.Code", "Wh.Name",
+                    "ItemInfo.ItemCode", "ItemInfo.ItemName",
+                    "ItemInfo.ItemID.MainItemCategory.Code", "ItemInfo.ItemID.MainItemCategory.Name",
+                    "Project.Code", "Project.Name",
+                    "StoreUOM.Name", "StoreQty", "ResvStQty"
+                  ],
+                  "PageSize": {{pageSize}},
+                  "PageIndex": {{page}},
+                  "Filters": [
+                    {"Field": "Wh.Code", "Operator": "like", "Value": "BF00%"}
+                  ]
+                }
+                """, ContractScrollService.WHQOH_DATASET, "U9仓库实时现存量", 2000, 5, null, "interval:30");
     }
 
     private void ensureEndpointIfMissing(String epCode, String epName, String bodyTpl,
@@ -330,8 +348,14 @@ public class ContractScrollInitializer implements CommandLineRunner {
             sc.setMaxPages(maxPages);
             sc.setNotes(dsName);
             sc.setIncrementalFilter(incFilter);
-            sc.setScheduleType("daily");
-            sc.setScheduleTime(hhmm);
+            if (hhmm != null && hhmm.startsWith("interval:")) {
+                int mins = Integer.parseInt(hhmm.substring("interval:".length()).trim());
+                sc.setScheduleType("interval");
+                sc.setScheduleIntervalMin(Math.max(5, mins));
+            } else {
+                sc.setScheduleType("daily");
+                sc.setScheduleTime(hhmm);
+            }
             sc.setUpdatedAt(Instant.now());
             syncConfigRepo.save(sc);
         }

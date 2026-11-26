@@ -46,6 +46,7 @@ import java.util.concurrent.*;
 public class ContractScrollService {
     public static final String REPORT_CODE = "rpt_contract_scroll";
     public static final String BASELINE_MONTH = "2026-10";
+    public static final String WHQOH_DATASET = "ds_u9c_whqoh";
 
     private static final List<String> REQUIRED_DATASETS = List.of(
             "ds_u9c_misc_rcv_l",
@@ -296,12 +297,15 @@ public class ContractScrollService {
         double prevDebt = prevMonth != null ? numOf(prevSum.get("end_total_debt")) : numOf(curSum.get("open_total_debt"));
         double endInvUnpaid = numOf(curSum.get("end_inv_unpaid_amt"));
 
-        double endBlackStock = numOf(curSum.get("end_black_stock"));
-        double endWhiteStock = numOf(curSum.get("end_white_stock"));
-        double endStockTotal = round4(endBlackStock + endWhiteStock);
-        double prevStockTotal = prevMonth != null
+        // 在制库存与负库存预警：优先取 U9 ERP 实时现存量（BF003 黑件客供库 + BF004 白件成品库）
+        U9InventorySnapshot invSnap = loadU9InventorySnapshot();
+        double stockBlack = invSnap != null ? invSnap.blackTon() : numOf(curSum.get("end_black_stock"));
+        double stockWhite = invSnap != null ? invSnap.whiteTon() : numOf(curSum.get("end_white_stock"));
+        double stockTotal = invSnap != null ? invSnap.totalTon() : round4(stockBlack + stockWhite);
+        Double prevStockTotal = invSnap != null ? null
+                : (prevMonth != null
                 ? round4(numOf(prevSum.get("end_black_stock")) + numOf(prevSum.get("end_white_stock")))
-                : round4(numOf(curSum.get("open_black_stock")) + numOf(curSum.get("open_white_stock")));
+                : round4(numOf(curSum.get("open_black_stock")) + numOf(curSum.get("open_white_stock"))));
 
         String baseDrill = "/reports/" + REPORT_CODE + "?month=" + targetMonth;
         List<Map<String, Object>> kpis = new ArrayList<>();
@@ -315,9 +319,10 @@ public class ContractScrollService {
                 baseDrill));
         kpis.add(kpiItem("total_debt", "期末总欠款", round2(endDebt), round2(prevDebt),
                 "元", "money", false, "已开票未回款 " + fmtWan(endInvUnpaid), baseDrill));
-        kpis.add(kpiItem("wip_stock", "期末在制库存", round2(endStockTotal), round2(prevStockTotal),
+        kpis.add(kpiItem("wip_stock", invSnap != null ? "U9 实时在制库存" : "期末在制库存", round2(stockTotal),
+                prevStockTotal != null ? round2(prevStockTotal) : null,
                 "吨", "ton", null,
-                "黑件 " + fmtNum(endBlackStock) + " 吨 · 白件 " + fmtNum(endWhiteStock) + " 吨", baseDrill));
+                "黑件 " + fmtNum(stockBlack) + " 吨 · 白件 " + fmtNum(stockWhite) + " 吨", baseDrill));
 
         // 趋势序列：复用 sharedRawByDs 与缓存
         List<Map<String, Object>> monthlySeries = new ArrayList<>(seriesMonths.size());
@@ -370,24 +375,31 @@ public class ContractScrollService {
                     return m;
                 }).toList();
 
-        // 负库存预警 Top 8
-        List<Map<String, Object>> stockAlerts = curView.rows().stream()
-                .filter(row -> numOf(row.get("end_black_stock")) < -0.001 || numOf(row.get("end_white_stock")) < -0.001)
-                .sorted(Comparator.comparingDouble(row -> Math.min(numOf(row.get("end_black_stock")), numOf(row.get("end_white_stock")))))
-                .limit(8)
-                .map(row -> {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("contractNo", String.valueOf(row.getOrDefault("contract_no", "")));
-                    m.put("customerName", String.valueOf(row.getOrDefault("customer_name", "")));
-                    m.put("productName", String.valueOf(row.getOrDefault("product_name", "")));
-                    m.put("blackStock", round2(numOf(row.get("end_black_stock"))));
-                    m.put("whiteStock", round2(numOf(row.get("end_white_stock"))));
-                    return m;
-                }).toList();
-
-        long totalNegativeCount = curView.rows().stream()
-                .filter(row -> numOf(row.get("end_black_stock")) < -0.001 || numOf(row.get("end_white_stock")) < -0.001)
-                .count();
+        // 负库存预警 Top 8（优先使用 U9 实时现存量 BF003/BF004 负库存明细）
+        List<Map<String, Object>> stockAlerts;
+        long totalNegativeCount;
+        if (invSnap != null) {
+            stockAlerts = invSnap.topAlerts();
+            totalNegativeCount = invSnap.negativeTotal();
+        } else {
+            stockAlerts = curView.rows().stream()
+                    .filter(row -> numOf(row.get("end_black_stock")) < -0.001 || numOf(row.get("end_white_stock")) < -0.001)
+                    .sorted(Comparator.comparingDouble(row -> Math.min(numOf(row.get("end_black_stock")), numOf(row.get("end_white_stock")))))
+                    .limit(8)
+                    .map(row -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("source", "contract_scroll");
+                        m.put("contractNo", String.valueOf(row.getOrDefault("contract_no", "")));
+                        m.put("customerName", String.valueOf(row.getOrDefault("customer_name", "")));
+                        m.put("productName", String.valueOf(row.getOrDefault("product_name", "")));
+                        m.put("blackStock", round2(numOf(row.get("end_black_stock"))));
+                        m.put("whiteStock", round2(numOf(row.get("end_white_stock"))));
+                        return m;
+                    }).toList();
+            totalNegativeCount = curView.rows().stream()
+                    .filter(row -> numOf(row.get("end_black_stock")) < -0.001 || numOf(row.get("end_white_stock")) < -0.001)
+                    .count();
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("month", targetMonth);
@@ -400,8 +412,128 @@ public class ContractScrollService {
         out.put("topDebtCustomers", topDebtCustomers);
         out.put("stockAlerts", stockAlerts);
         out.put("stockAlertTotal", totalNegativeCount);
+        out.put("stockSource", invSnap != null ? "u9_whqoh" : "contract_scroll");
+        if (invSnap != null) {
+            Map<String, Object> invMeta = new LinkedHashMap<>();
+            invMeta.put("source", "u9_whqoh");
+            invMeta.put("mode", invSnap.sourceMode());
+            invMeta.put("asOf", invSnap.asOf());
+            invMeta.put("blackTon", invSnap.blackTon());
+            invMeta.put("whiteTon", invSnap.whiteTon());
+            invMeta.put("totalTon", invSnap.totalTon());
+            invMeta.put("negativeTotal", invSnap.negativeTotal());
+            invMeta.put("blackNegativeCount", invSnap.blackNegativeCount());
+            invMeta.put("whiteNegativeCount", invSnap.whiteNegativeCount());
+            out.put("u9Inventory", invMeta);
+        }
         out.put("lastSyncedAt", curView.lastSyncedAt());
         return out;
+    }
+
+    public record U9InventorySnapshot(
+            double blackTon,
+            double whiteTon,
+            double totalTon,
+            int negativeTotal,
+            int blackNegativeCount,
+            int whiteNegativeCount,
+            List<Map<String, Object>> topAlerts,
+            String sourceMode,
+            String asOf
+    ) {}
+
+    private U9InventorySnapshot loadU9InventorySnapshot() {
+        try {
+            boolean preferLocal = queryModeService.isLocal();
+            List<ObjectNode> rawRows = null;
+            String sourceMode = "realtime";
+            String asOf = Instant.now().toString();
+            if (preferLocal) {
+                List<ObjectNode> localRows = syncStore.loadRaw(WHQOH_DATASET);
+                if (!localRows.isEmpty()) {
+                    rawRows = localRows;
+                    sourceMode = "local";
+                    Instant ts = syncStore.lastSyncedAt(WHQOH_DATASET);
+                    if (ts != null) asOf = ts.toString();
+                }
+            }
+            if (rawRows == null) {
+                rawRows = fetchDatasetFromUpstream(WHQOH_DATASET, new ArrayList<>());
+                sourceMode = "realtime";
+                asOf = Instant.now().toString();
+            }
+            if (rawRows == null || rawRows.isEmpty()) return null;
+            return summarizeWhQoh(rawRows, sourceMode, asOf);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 将 U9 WhQoh 现存量原始行聚合为 BF003(黑件) + BF004(白件) 真实吨位与负库存清单 */
+    public static U9InventorySnapshot summarizeWhQoh(List<ObjectNode> rawRows, String sourceMode, String asOf) {
+        double blackTon = 0.0;
+        double whiteTon = 0.0;
+        int blackNeg = 0;
+        int whiteNeg = 0;
+        List<Map<String, Object>> negList = new ArrayList<>();
+
+        for (ObjectNode n : rawRows) {
+            String whCode = strAt(n, "Wh.Code");
+            if (!"BF003".equalsIgnoreCase(whCode) && !"BF004".equalsIgnoreCase(whCode)) continue;
+            Double rawQty = numAt(n, "StoreQty");
+            if (rawQty == null) continue;
+            String uom = strAt(n, "StoreUOM.Name");
+            Double tonQty = convertStockQtyToTons(rawQty, uom);
+            if (tonQty == null) continue;
+
+            boolean isBlack = "BF003".equalsIgnoreCase(whCode);
+            if (isBlack) blackTon += tonQty;
+            else whiteTon += tonQty;
+
+            if (tonQty < -0.001) {
+                if (isBlack) blackNeg++;
+                else whiteNeg++;
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("source", "u9_whqoh");
+                m.put("whCode", whCode.toUpperCase(Locale.ROOT));
+                m.put("whName", strAt(n, "Wh.Name"));
+                m.put("itemCode", strAt(n, "ItemInfo.ItemCode"));
+                m.put("productName", strAt(n, "ItemInfo.ItemName"));
+                m.put("customerName", strAt(n, "ItemInfo.ItemID.MainItemCategory.Name"));
+                m.put("contractNo", strAt(n, "Project.Code"));
+                m.put("blackStock", isBlack ? round2(tonQty) : 0.0);
+                m.put("whiteStock", isBlack ? 0.0 : round2(tonQty));
+                m.put("qty", round2(tonQty));
+                negList.add(m);
+            }
+        }
+
+        negList.sort(Comparator.comparingDouble(m -> numOf(m.get("qty"))));
+        List<Map<String, Object>> topAlerts = negList.stream().limit(8).toList();
+        double b = round2(blackTon);
+        double w = round2(whiteTon);
+        return new U9InventorySnapshot(
+                b,
+                w,
+                round2(b + w),
+                negList.size(),
+                blackNeg,
+                whiteNeg,
+                topAlerts,
+                sourceMode,
+                asOf
+        );
+    }
+
+    private static Double convertStockQtyToTons(double qty, String uom) {
+        String u = uom == null ? "" : uom.trim().toLowerCase(Locale.ROOT);
+        if (u.isEmpty() || "吨".equals(u) || "t".equals(u) || "ton".equals(u) || "tons".equals(u)) {
+            return qty;
+        }
+        if ("公斤".equals(u) || "千克".equals(u) || "kg".equals(u)) {
+            return qty / 1000.0;
+        }
+        return null;
     }
 
     private Map<String, Object> kpiItem(String key, String label, double value, Double prevValue,

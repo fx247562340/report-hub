@@ -39,11 +39,16 @@ type TopDebtCustomer = {
 }
 
 type StockAlert = {
+  source?: 'u9_whqoh' | 'contract_scroll'
+  whCode?: string
+  whName?: string
+  itemCode?: string
   contractNo: string
   customerName: string
   productName: string
   blackStock: number
   whiteStock: number
+  qty?: number
 }
 
 type OverviewData = {
@@ -69,6 +74,18 @@ type OverviewData = {
     topDebtCustomers: TopDebtCustomer[]
     stockAlerts: StockAlert[]
     stockAlertTotal: number
+    stockSource?: string
+    u9Inventory?: {
+      source: string
+      mode: string
+      asOf?: string
+      blackTon: number
+      whiteTon: number
+      totalTon: number
+      negativeTotal: number
+      blackNegativeCount: number
+      whiteNegativeCount: number
+    }
     lastSyncedAt?: string | null
   }
 }
@@ -724,24 +741,51 @@ export default function Home() {
                   </div>
                 )
               ) : (exec.stockAlerts?.length || 0) === 0 ? (
-                <EmptyState compact variant="data" title="暂无负库存异常" desc="当前月份所有合同黑白件结存均为非负" />
+                <EmptyState
+                  compact
+                  variant="data"
+                  title="暂无负库存异常"
+                  desc={exec.stockSource === 'u9_whqoh'
+                    ? 'U9 仓库（BF003 黑件 / BF004 白件）实时现存量均为非负'
+                    : '当前月份所有合同黑白件结存均为非负'}
+                />
               ) : (
                 <div className="dash-rank-list">
+                  {exec.stockSource === 'u9_whqoh' && (
+                    <div className="dash-alert-source">
+                      <span>来源：U9 实时现存量（BF003 黑件 {exec.u9Inventory?.blackNegativeCount ?? 0} 条 · BF004 白件 {exec.u9Inventory?.whiteNegativeCount ?? 0} 条）</span>
+                      {exec.u9Inventory?.asOf && <span className="mono">{fmtSyncTime(exec.u9Inventory.asOf)}</span>}
+                    </div>
+                  )}
                   {exec.stockAlerts.map((a, idx) => {
+                    const isWh = a.source === 'u9_whqoh'
                     const qs = new URLSearchParams({ month: activeMonth })
                     if (a.contractNo) qs.set('contractNo', a.contractNo)
                     else if (a.customerName) qs.set('customer', a.customerName)
                     return (
                       <button
                         type="button"
-                        key={`${a.contractNo}-${a.customerName}-${idx}`}
+                        key={`${a.itemCode || a.contractNo}-${a.customerName}-${idx}`}
                         className="dash-rank-item"
                         onClick={() => navigate(`/reports/rpt_contract_scroll?${qs.toString()}`)}
+                        title={isWh
+                          ? `${a.whName || a.whCode || ''} · ${a.itemCode || ''} ${a.productName || ''}`
+                          : `点击查看「${a.customerName || a.contractNo}」滚动明细`}
                       >
                         <div className="dash-rank-top">
                           <span className="dash-rank-name">
-                            <span className="mono">{a.contractNo || '无合同号'}</span>
-                            <em className="rank-meta">{a.customerName}</em>
+                            {isWh ? (
+                              <>
+                                <span className="mono">{a.itemCode || a.contractNo || '未编码'}</span>
+                                <span>{a.customerName || '未知客户'}</span>
+                                {a.productName && <em className="rank-meta">{a.productName}</em>}
+                              </>
+                            ) : (
+                              <>
+                                <span className="mono">{a.contractNo || '无合同号'}</span>
+                                <em className="rank-meta">{a.customerName}</em>
+                              </>
+                            )}
                           </span>
                           <span className="row" style={{ gap: 6 }}>
                             {a.blackStock < -0.001 && (

@@ -186,6 +186,10 @@ public class AiToolExecutor {
         payload.put("kpis", exec.get("kpis"));
         payload.put("monthlySeries", exec.get("monthlySeries"));
         payload.put("topDebtCustomers", exec.get("topDebtCustomers"));
+        payload.put("stockSource", exec.get("stockSource"));
+        if (exec.get("u9Inventory") != null) {
+            payload.put("u9Inventory", exec.get("u9Inventory"));
+        }
         payload.put("stockAlertTotal", exec.get("stockAlertTotal"));
         payload.put("stockAlertsSample", exec.get("stockAlerts"));
         payload.put("lastSyncedAt", exec.get("lastSyncedAt"));
