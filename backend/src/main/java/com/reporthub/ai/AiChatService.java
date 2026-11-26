@@ -176,6 +176,7 @@ public class AiChatService {
             llmMessages.add(Map.of("role", "user", "content", question));
 
             List<Map<String, Object>> tools = toolExecutor.toolDefinitions(isAdmin);
+            List<String> toolResultNotes = new ArrayList<>();
             String finalAnswer = null;
 
             // Phase A: 多轮 Tool Calling 规划与数据拉取
@@ -225,6 +226,7 @@ public class AiChatService {
                         linkDedup.putIfAbsent(dl.to(), dl);
                     }
                     String toolJson = mapper.writeValueAsString(tr.payload());
+                    toolResultNotes.add("【" + tr.displayLabel() + "（" + tr.summaryText() + "）】\n" + truncate(toolJson, 5000));
                     llmMessages.add(Map.of(
                             "role", "tool",
                             "tool_call_id", tc.id(),
@@ -243,20 +245,41 @@ public class AiChatService {
                 sendEvent(emitter, "links", linksPayload);
             }
 
-            // Phase B: 流式输出最终答案（若前面直接返回了答案，则按小块平滑输出；若达到轮次上限则走 stream=true 总结）
+            // Phase B: 流式输出最终答案（若前面直接返回了答案，则按小块平滑输出；若达到轮次上限则显式收口总结，流式为空时纯文本非流式兜底）
             sendEvent(emitter, "status", Map.of("step", "writing", "text", "正在整理分析结论…"));
             if (finalAnswer != null && !finalAnswer.isBlank()) {
-                int step = 24;
-                for (int i = 0; i < finalAnswer.length(); i += step) {
-                    String chunk = finalAnswer.substring(i, Math.min(finalAnswer.length(), i + step));
-                    sendEvent(emitter, "delta", Map.of("content", chunk));
-                }
+                emitTextChunks(emitter, finalAnswer);
             } else {
-                finalAnswer = aiClient.chatStream(cfg, llmMessages, piece -> {
+                List<Map<String, Object>> wrapUpMessages = new ArrayList<>(llmMessages);
+                wrapUpMessages.add(Map.of(
+                        "role", "user",
+                        "content", "工具调用已达到最大轮次上限，请停止调用任何工具，直接基于上方已经获取到的工具结果，用清晰、严谨的中文给出最终结论（若部分明细未查到，请如实说明已查到的数值和未查到的原因）。"
+                ));
+                try {
+                    finalAnswer = aiClient.chatStream(cfg, wrapUpMessages, piece -> {
+                        try {
+                            sendEvent(emitter, "delta", Map.of("content", piece));
+                        } catch (IOException ignored) {}
+                    });
+                } catch (Exception streamEx) {
+                    log.warn("Phase B stream wrap-up failed, falling back to plain summary: {}", streamEx.getMessage());
+                    finalAnswer = "";
+                }
+
+                // 部分兼容网关在历史含 role=tool 但不传 tools 时会返回空流，此时用纯文本上下文做非流式兜底总结
+                if (finalAnswer == null || finalAnswer.isBlank()) {
                     try {
-                        sendEvent(emitter, "delta", Map.of("content", piece));
-                    } catch (IOException ignored) {}
-                });
+                        List<Map<String, Object>> plainMsgs = buildPlainSummaryMessages(
+                                AiPromptBuilder.buildSystemPrompt(), question, toolResultNotes);
+                        AiClient.ChatTurnResult fallbackTurn = aiClient.chatOnce(cfg, plainMsgs, null);
+                        if (fallbackTurn.content() != null && !fallbackTurn.content().isBlank()) {
+                            finalAnswer = fallbackTurn.content();
+                            emitTextChunks(emitter, finalAnswer);
+                        }
+                    } catch (Exception fbEx) {
+                        log.warn("Phase B plain fallback summary failed: {}", fbEx.getMessage());
+                    }
+                }
             }
 
             if (finalAnswer == null || finalAnswer.isBlank()) {
@@ -316,6 +339,32 @@ public class AiChatService {
         } catch (Exception e) {
             return List.of();
         }
+    }
+
+    private void emitTextChunks(SseEmitter emitter, String text) throws IOException {
+        int step = 24;
+        for (int i = 0; i < text.length(); i += step) {
+            String chunk = text.substring(i, Math.min(text.length(), i + step));
+            sendEvent(emitter, "delta", Map.of("content", chunk));
+        }
+    }
+
+    static List<Map<String, Object>> buildPlainSummaryMessages(String systemPrompt,
+                                                               String question,
+                                                               List<String> toolResultNotes) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("用户问题：").append(question).append("\n\n");
+        if (toolResultNotes != null && !toolResultNotes.isEmpty()) {
+            sb.append("以下是系统工具已查询到的真实业务数据：\n\n");
+            for (int i = 0; i < toolResultNotes.size(); i++) {
+                sb.append(i + 1).append(". ").append(toolResultNotes.get(i)).append("\n\n");
+            }
+        }
+        sb.append("请严格基于以上真实查询结果，用简洁严谨的中文直接回答用户问题（严禁编造未出现的数字；如有未能查到的部分请如实说明）。");
+        return List.of(
+                Map.of("role", "system", "content", systemPrompt),
+                Map.of("role", "user", "content", sb.toString())
+        );
     }
 
     private static String truncate(String s, int max) {

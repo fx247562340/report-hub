@@ -69,6 +69,7 @@ public class AiToolExecutor {
             case "compare_contract_months" -> "跨月经营对比";
             case "query_hang_report" -> "挂次生产与重量差异";
             case "query_cust_monthly_flow" -> "客户月度黑白件出入库";
+            case "query_u9_doc_flow" -> "U9 按日出入库与领料流水";
             case "query_u9_inventory" -> "U9 实时仓库现存量";
             case "get_sync_health" -> "数据同步状态巡检";
             default -> toolName;
@@ -148,6 +149,24 @@ public class AiToolExecutor {
                 List.of("direction")
         ));
 
+        Map<String, Object> docFlowProps = new LinkedHashMap<>();
+        docFlowProps.put("flowType", propEnum(
+                "单据流水类型：black_in=黑件来料(BF003杂收单)，black_out=黑件领料(BF003生产领料单)，black_all=同时查黑件来料与领料，white_in=白件入库(BF004完工报告)，white_out=白件发货(BF004出货单)，white_all=同时查白件入库与发货，all=全部四类",
+                List.of("black_in", "black_out", "black_all", "white_in", "white_out", "white_all", "all")));
+        docFlowProps.put("startDate", prop("string", "开始日期 YYYY-MM-DD，例如 2026-11-23"));
+        docFlowProps.put("endDate", prop("string", "结束日期 YYYY-MM-DD（含当日全天），例如 2026-11-26"));
+        docFlowProps.put("customerKeyword", prop("string", "可选，客户简称关键词"));
+        docFlowProps.put("itemCode", prop("string", "可选，料号关键词（如 1205057-0005、1104057-0004）"));
+        docFlowProps.put("productKeyword", prop("string", "可选，物料名称关键词（如 三角梁支架5、6、7、电缆沟支架）"));
+        docFlowProps.put("projectNo", prop("string", "可选，项目号/合同号关键词"));
+        docFlowProps.put("limit", prop("integer", "每类流水返回单据明细条数上限，默认 15，最大 30"));
+        tools.add(fn(
+                "query_u9_doc_flow",
+                "按任意日期区间查询 U9 ERP 真实出入库与生产领料单据流水（黑件来料杂收单、黑件生产领料单、白件完工入库单、白件出货单）：支持按起止日期、客户、料号、物料名称筛选，自动计算汇总吨位、按日小计、按料号汇总与原始单据明细；查包含今日的近期数据会自动实时穿透 U9。",
+                docFlowProps,
+                List.of("flowType", "startDate", "endDate")
+        ));
+
         Map<String, Object> invProps = new LinkedHashMap<>();
         invProps.put("warehouse", propEnum("仓库筛选：ALL=全部(BF003+BF004)，BF003=黑件客供原材料库，BF004=白件镀锌成品库", List.of("ALL", "BF003", "BF004")));
         invProps.put("customerKeyword", prop("string", "可选，客户名称或简称关键词"));
@@ -188,6 +207,7 @@ public class AiToolExecutor {
             case "compare_contract_months" -> runCompareMonths(args);
             case "query_hang_report" -> runHangReport(args);
             case "query_cust_monthly_flow" -> runCustFlow(args);
+            case "query_u9_doc_flow" -> runU9DocFlow(args);
             case "query_u9_inventory" -> runU9Inventory(args);
             case "get_sync_health" -> {
                 if (!isAdmin) {
@@ -739,6 +759,339 @@ public class AiToolExecutor {
         );
         return new ToolResult("query_cust_monthly_flow", report.getName(),
                 month + " 共 " + round2(totalQty) + " 吨", payload, links);
+    }
+
+    private ToolResult runU9DocFlow(JsonNode args) {
+        String flowType = optText(args, "flowType", "black_all").toLowerCase(Locale.ROOT);
+        LocalDate today = LocalDate.now();
+        String startDate = day10(optText(args, "startDate", ""));
+        String endDate = day10(optText(args, "endDate", ""));
+        if (startDate.isEmpty() && endDate.isEmpty()) {
+            startDate = today.minusDays(7).toString();
+            endDate = today.toString();
+        } else if (startDate.isEmpty()) {
+            startDate = endDate;
+        } else if (endDate.isEmpty()) {
+            endDate = startDate;
+        }
+        String custKw = optText(args, "customerKeyword", "");
+        String itemCodeKw = optText(args, "itemCode", "");
+        String prodKw = optText(args, "productKeyword", "");
+        String projKw = optText(args, "projectNo", "");
+        int limit = clamp(args.path("limit").asInt(15), 1, 30);
+
+        List<String> targetTypes = switch (flowType) {
+            case "black_in" -> List.of("black_in");
+            case "black_out" -> List.of("black_out");
+            case "white_in" -> List.of("white_in");
+            case "white_out" -> List.of("white_out");
+            case "white_all" -> List.of("white_in", "white_out");
+            case "all" -> List.of("black_in", "black_out", "white_in", "white_out");
+            default -> List.of("black_in", "black_out");
+        };
+
+        boolean forceRealtime = shouldUseRealtimeForRecentU9Flow(startDate, endDate, today);
+
+        Map<String, Object> sections = new LinkedHashMap<>();
+        List<String> summaryParts = new ArrayList<>();
+        Set<String> modes = new LinkedHashSet<>();
+
+        for (String ft : targetTypes) {
+            String dsCode = datasetOfFlowType(ft);
+            ContractScrollService.U9InventoryRawData raw = contractScrollService.loadDatasetRawData(dsCode, forceRealtime);
+            modes.add(raw.sourceMode());
+            Map<String, Object> sec = summarizeU9DocFlow(
+                    ft, raw.rows(), startDate, endDate, custKw, itemCodeKw, prodKw, projKw, limit, raw.sourceMode(), raw.asOf());
+            sections.put(ft, sec);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> sm = (Map<String, Object>) sec.get("summary");
+            summaryParts.add(flowTypeLabel(ft) + " " + sm.get("totalQtyTon") + " 吨(" + sm.get("docLineCount") + "笔)");
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("dateRange", startDate + " ~ " + endDate);
+        payload.put("flowType", flowType);
+        payload.put("dataMode", modes.contains("realtime") ? "realtime" : "local");
+        payload.put("flows", sections);
+
+        // 若同时查入+出，自动附带净变动
+        if (sections.containsKey("black_in") && sections.containsKey("black_out")) {
+            double inTon = extractFlowTotalTon(sections.get("black_in"));
+            double outTon = extractFlowTotalTon(sections.get("black_out"));
+            payload.put("blackNetChangeTon", round2(inTon - outTon));
+        }
+        if (sections.containsKey("white_in") && sections.containsKey("white_out")) {
+            double inTon = extractFlowTotalTon(sections.get("white_in"));
+            double outTon = extractFlowTotalTon(sections.get("white_out"));
+            payload.put("whiteNetChangeTon", round2(inTon - outTon));
+        }
+
+        List<DrillLink> links = new ArrayList<>();
+        String ym = startDate.length() >= 7 ? startDate.substring(0, 7) : latestMonth();
+        links.add(new DrillLink("查看 " + ym + " 合同滚动明细", "/reports/rpt_contract_scroll?month=" + enc(ym)));
+        if (targetTypes.contains("black_in")) {
+            links.add(new DrillLink("打开《客户月度黑件入库表》", "/reports/rpt_cust_month_in"));
+        }
+        if (targetTypes.contains("white_out")) {
+            links.add(new DrillLink("打开《客户月度白件出库表》", "/reports/rpt_cust_month_out"));
+        }
+
+        return new ToolResult("query_u9_doc_flow", "U9 按日出入库与领料流水",
+                startDate + "~" + endDate + " " + String.join(" / ", summaryParts), payload, links);
+    }
+
+    static Map<String, Object> summarizeU9DocFlow(String flowType,
+                                                  List<ObjectNode> rawRows,
+                                                  String startDate,
+                                                  String endDate,
+                                                  String custKw,
+                                                  String itemCodeKw,
+                                                  String prodKw,
+                                                  String projKw,
+                                                  int limit,
+                                                  String sourceMode,
+                                                  String asOf) {
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        for (ObjectNode n : rawRows) {
+            String bizDate = day10(extractFlowDate(flowType, n));
+            if (bizDate.isEmpty()) continue;
+            if (!startDate.isEmpty() && bizDate.compareTo(startDate) < 0) continue;
+            if (!endDate.isEmpty() && bizDate.compareTo(endDate) > 0) continue;
+
+            double qty = extractFlowQty(flowType, n);
+            if (Math.abs(qty) < 1e-6) continue;
+
+            Map<String, Object> rec = new LinkedHashMap<>();
+            rec.put("date", bizDate);
+            rec.put("doc_no", extractFlowDocNo(flowType, n));
+            rec.put("customer_name", extractFlowCustomer(flowType, n));
+            rec.put("item_code", extractFlowItemCode(flowType, n));
+            rec.put("product_name", extractFlowItemName(flowType, n));
+            String proj = extractFlowProject(flowType, n);
+            if (!proj.isEmpty()) rec.put("project_no", proj);
+            rec.put("qty_ton", round3(qty));
+            normalized.add(rec);
+        }
+
+        EntityResolver.Resolution res = null;
+        Set<String> allowedCust = null;
+        if (custKw != null && !custKw.isBlank()) {
+            List<String> universe = normalized.stream()
+                    .map(r -> str(r.get("customer_name")))
+                    .filter(s -> !s.isBlank())
+                    .distinct()
+                    .toList();
+            res = EntityResolver.resolve(custKw, universe);
+            allowedCust = new HashSet<>(res.matched());
+        }
+
+        String itemKwLower = itemCodeKw == null ? "" : itemCodeKw.trim().toLowerCase(Locale.ROOT);
+        String prodKwLower = prodKw == null ? "" : prodKw.trim().toLowerCase(Locale.ROOT);
+        String projKwLower = projKw == null ? "" : projKw.trim().toLowerCase(Locale.ROOT);
+
+        List<Map<String, Object>> filtered = new ArrayList<>();
+        double totalTon = 0.0;
+        Map<String, double[]> byDate = new TreeMap<>();
+        Map<String, double[]> byItem = new LinkedHashMap<>();
+        Map<String, Map<String, String>> byItemMeta = new LinkedHashMap<>();
+
+        for (Map<String, Object> r : normalized) {
+            if (allowedCust != null && !allowedCust.contains(str(r.get("customer_name")))) continue;
+            String ic = str(r.get("item_code"));
+            String pn = str(r.get("product_name"));
+            String prj = str(r.get("project_no"));
+            if (!itemKwLower.isEmpty() && !ic.toLowerCase(Locale.ROOT).contains(itemKwLower)) continue;
+            if (!prodKwLower.isEmpty()
+                    && !pn.toLowerCase(Locale.ROOT).contains(prodKwLower)
+                    && !ic.toLowerCase(Locale.ROOT).contains(prodKwLower)) continue;
+            if (!projKwLower.isEmpty() && !prj.toLowerCase(Locale.ROOT).contains(projKwLower)) continue;
+
+            double q = num(r.get("qty_ton"));
+            totalTon += q;
+            filtered.add(r);
+
+            String dt = str(r.get("date"));
+            double[] dAcc = byDate.computeIfAbsent(dt, k -> new double[2]);
+            dAcc[0] += q;
+            dAcc[1] += 1;
+
+            String itemKey = ic + "||" + pn + "||" + str(r.get("customer_name"));
+            double[] iAcc = byItem.computeIfAbsent(itemKey, k -> new double[2]);
+            iAcc[0] += q;
+            iAcc[1] += 1;
+            byItemMeta.putIfAbsent(itemKey, Map.of(
+                    "item_code", ic,
+                    "product_name", pn,
+                    "customer_name", str(r.get("customer_name"))
+            ));
+        }
+
+        List<Map<String, Object>> dailyBreakdown = byDate.entrySet().stream().map(e -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("date", e.getKey());
+            m.put("qty_ton", round3(e.getValue()[0]));
+            m.put("doc_count", Math.round(e.getValue()[1]));
+            return m;
+        }).toList();
+
+        List<Map<String, Object>> itemSummary = byItem.entrySet().stream()
+                .sorted((a, b) -> Double.compare(b.getValue()[0], a.getValue()[0]))
+                .limit(limit)
+                .map(e -> {
+                    Map<String, String> meta = byItemMeta.get(e.getKey());
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("item_code", meta.get("item_code"));
+                    m.put("product_name", meta.get("product_name"));
+                    m.put("customer_name", meta.get("customer_name"));
+                    m.put("qty_ton", round3(e.getValue()[0]));
+                    m.put("doc_count", Math.round(e.getValue()[1]));
+                    return m;
+                }).toList();
+
+        filtered.sort(Comparator.comparing((Map<String, Object> m) -> str(m.get("date")))
+                .thenComparing(m -> str(m.get("doc_no"))));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("label", flowTypeLabel(flowType));
+        out.put("dataset", datasetOfFlowType(flowType));
+        out.put("dataMode", sourceMode);
+        out.put("asOf", asOf);
+        if (res != null) {
+            out.put("customerResolution", Map.of(
+                    "query", res.query(), "matched", res.matched(),
+                    "ambiguous", res.ambiguous(), "suggestions", res.suggestions()
+            ));
+        }
+        out.put("summary", Map.of(
+                "docLineCount", filtered.size(),
+                "totalQtyTon", round3(totalTon)
+        ));
+        out.put("dailyBreakdown", dailyBreakdown);
+        out.put("byItem", itemSummary);
+        out.put("topDocs", filtered.stream().limit(limit).toList());
+        return out;
+    }
+
+    static boolean shouldUseRealtimeForRecentU9Flow(String startDate, String endDate, LocalDate today) {
+        String s10 = day10(startDate);
+        String e10 = day10(endDate);
+        if (s10.isEmpty() || e10.isEmpty()) return false;
+        try {
+            LocalDate sd = LocalDate.parse(s10);
+            LocalDate ed = LocalDate.parse(e10);
+            if (ed.isBefore(today)) return false;
+            long spanDays = ChronoUnit.DAYS.between(sd, ed);
+            return spanDays >= 0 && spanDays <= 7;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static String datasetOfFlowType(String ft) {
+        return switch (ft) {
+            case "black_in" -> "ds_u9c_misc_rcv_l";
+            case "black_out" -> "ds_u9c_issue_bf003";
+            case "white_in" -> "ds_u9c_complete_bf004";
+            case "white_out" -> "ds_u9c_ship_l";
+            default -> "ds_u9c_misc_rcv_l";
+        };
+    }
+
+    private static String flowTypeLabel(String ft) {
+        return switch (ft) {
+            case "black_in" -> "BF003 黑件来料(杂收单)";
+            case "black_out" -> "BF003 黑件领料(生产领料单)";
+            case "white_in" -> "BF004 白件入库(完工报告)";
+            case "white_out" -> "BF004 白件发货(出货单)";
+            default -> ft;
+        };
+    }
+
+    private static String extractFlowDate(String ft, ObjectNode n) {
+        return switch (ft) {
+            case "black_in" -> pathText(n, "MiscRcvTrans", "BusinessDate");
+            case "black_out" -> pathText(n, "IssueDoc", "BusinessDate");
+            case "white_in" -> pathText(n, "BusinessDate");
+            case "white_out" -> pathText(n, "Ship", "BusinessDate");
+            default -> "";
+        };
+    }
+
+    private static String extractFlowDocNo(String ft, ObjectNode n) {
+        return switch (ft) {
+            case "black_in" -> pathText(n, "MiscRcvTrans", "DocNo");
+            case "black_out" -> pathText(n, "IssueDoc", "DocNo");
+            case "white_in" -> pathText(n, "DocNo");
+            case "white_out" -> pathText(n, "Ship", "DocNo");
+            default -> "";
+        };
+    }
+
+    private static double extractFlowQty(String ft, ObjectNode n) {
+        return switch (ft) {
+            case "black_in" -> num(pathText(n, "StoreUOMQty"));
+            case "black_out" -> {
+                String v = pathText(n, "IssuedQty");
+                yield num(v.isEmpty() ? pathText(n, "IssueQty") : v);
+            }
+            case "white_in" -> {
+                String v = pathText(n, "RcvQtyByWhUOM");
+                yield num(v.isEmpty() ? pathText(n, "CompleteQty") : v);
+            }
+            case "white_out" -> num(pathText(n, "ShipQtyTUAmount"));
+            default -> 0.0;
+        };
+    }
+
+    private static String extractFlowItemCode(String ft, ObjectNode n) {
+        return switch (ft) {
+            case "black_in", "white_out" -> pathText(n, "ItemInfo", "ItemCode");
+            case "black_out", "white_in" -> pathText(n, "Item", "Code");
+            default -> "";
+        };
+    }
+
+    private static String extractFlowItemName(String ft, ObjectNode n) {
+        return switch (ft) {
+            case "black_in", "white_out" -> pathText(n, "ItemInfo", "ItemName");
+            case "black_out", "white_in" -> pathText(n, "Item", "Name");
+            default -> "";
+        };
+    }
+
+    private static String extractFlowCustomer(String ft, ObjectNode n) {
+        return switch (ft) {
+            case "black_in", "white_out" -> pathText(n, "ItemInfo", "ItemID", "MainItemCategory", "Name");
+            case "black_out", "white_in" -> pathText(n, "Item", "MainItemCategory", "Name");
+            default -> "";
+        };
+    }
+
+    private static String extractFlowProject(String ft, ObjectNode n) {
+        return switch (ft) {
+            case "black_out" -> {
+                String p = pathText(n, "MO", "Project", "Code");
+                yield p.isEmpty() ? pathText(n, "Project", "Code") : p;
+            }
+            case "white_in" -> {
+                String p = pathText(n, "Project", "Code");
+                yield p.isEmpty() ? pathText(n, "MO", "Project", "Code") : p;
+            }
+            default -> pathText(n, "Project", "Code");
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private static double extractFlowTotalTon(Object sectionObj) {
+        if (!(sectionObj instanceof Map<?, ?> sec)) return 0.0;
+        Object sm = sec.get("summary");
+        if (!(sm instanceof Map<?, ?> m)) return 0.0;
+        return num(m.get("totalQtyTon"));
+    }
+
+    private static double round3(double v) {
+        if (Double.isNaN(v) || Double.isInfinite(v)) return 0;
+        return BigDecimal.valueOf(v).setScale(3, RoundingMode.HALF_UP).doubleValue();
     }
 
     private ToolResult runU9Inventory(JsonNode args) {

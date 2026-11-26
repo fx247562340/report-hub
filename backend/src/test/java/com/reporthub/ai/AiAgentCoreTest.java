@@ -157,4 +157,47 @@ class AiAgentCoreTest {
         assertFalse(AiToolExecutor.shouldUseRealtimeForRecentHang("2026-11-01", "2026-11-30", today));
         assertFalse(AiToolExecutor.shouldUseRealtimeForRecentHang("2026-11-25", "2026-11-25", today));
     }
+
+    @Test
+    void u9DocFlowSummarizesBlackInAndBlackOutByDateRangeAndProduct() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        var inRows = List.of(
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"MiscRcvTrans":{"DocNo":"Mis2026110044","BusinessDate":"2026-11-23 00:00:00"},"StoreUOMQty":"15.26","ItemInfo":{"ItemCode":"1205057-0005","ItemName":"三角梁支架5、6、7","ItemID":{"MainItemCategory":{"Name":"大同颐隆重工"}}}}
+                        """),
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"MiscRcvTrans":{"DocNo":"Mis2026110046","BusinessDate":"2026-11-24 00:00:00"},"StoreUOMQty":"15.48","ItemInfo":{"ItemCode":"1205057-0005","ItemName":"三角梁支架5、6、7","ItemID":{"MainItemCategory":{"Name":"大同颐隆重工"}}}}
+                        """),
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"MiscRcvTrans":{"DocNo":"Mis2026110001","BusinessDate":"2026-11-10 00:00:00"},"StoreUOMQty":"99.00","ItemInfo":{"ItemCode":"1205057-0005","ItemName":"三角梁支架5、6、7","ItemID":{"MainItemCategory":{"Name":"大同颐隆重工"}}}}
+                        """)
+        );
+        var outRows = List.of(
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"IssueDoc":{"DocNo":"GC-20261124-006","BusinessDate":"2026-11-24 00:00:00"},"IssuedQty":"2.63","Item":{"Code":"1205057-0005","Name":"三角梁支架5、6、7","MainItemCategory":{"Name":"大同颐隆重工"}}}
+                        """),
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree("""
+                        {"IssueDoc":{"DocNo":"GC-20261124-007","BusinessDate":"2026-11-24 00:00:00"},"IssuedQty":"2.575","Item":{"Code":"1205057-0005","Name":"三角梁支架5、6、7","MainItemCategory":{"Name":"大同颐隆重工"}}}
+                        """)
+        );
+
+        var inSec = AiToolExecutor.summarizeU9DocFlow(
+                "black_in", inRows, "2026-11-23", "2026-11-26", "", "", "三角梁支架5、6、7", "", 15, "local", "2026-11-26");
+        @SuppressWarnings("unchecked")
+        var inSum = (java.util.Map<String, Object>) inSec.get("summary");
+        assertEquals(2, ((Number) inSum.get("docLineCount")).intValue());
+        assertEquals(30.74, ((Number) inSum.get("totalQtyTon")).doubleValue(), 0.001);
+
+        var outSec = AiToolExecutor.summarizeU9DocFlow(
+                "black_out", outRows, "2026-11-23", "2026-11-26", "", "1205057-0005", "", "", 15, "local", "2026-11-26");
+        @SuppressWarnings("unchecked")
+        var outSum = (java.util.Map<String, Object>) outSec.get("summary");
+        assertEquals(2, ((Number) outSum.get("docLineCount")).intValue());
+        assertEquals(5.205, ((Number) outSum.get("totalQtyTon")).doubleValue(), 0.001);
+
+        var plainMsgs = AiChatService.buildPlainSummaryMessages("sys", "查一下", List.of("【工具1】结果"));
+        assertEquals(2, plainMsgs.size());
+        assertEquals("user", plainMsgs.get(1).get("role"));
+        assertTrue(String.valueOf(plainMsgs.get(1).get("content")).contains("工具1"));
+    }
 }

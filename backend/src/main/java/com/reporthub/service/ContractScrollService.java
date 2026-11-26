@@ -444,27 +444,48 @@ public class ContractScrollService {
 
     public record U9InventoryRawData(List<ObjectNode> rows, String sourceMode, String asOf) {}
 
-    /** 读取 U9 实时现存量原始明细行（支持 local/realtime 双模与空库自动回退实时） */
-    public U9InventoryRawData loadU9InventoryRawData(boolean forceRealtime) {
+    /** 通用读取 U9 数据集原始行（支持 local/realtime 双模、强制实时及失败自动回退本地） */
+    public U9InventoryRawData loadDatasetRawData(String dsCode, boolean forceRealtime) {
         boolean preferLocal = !forceRealtime && queryModeService.isLocal();
         List<ObjectNode> rawRows = null;
         String sourceMode = "realtime";
         String asOf = Instant.now().toString();
         if (preferLocal) {
-            List<ObjectNode> localRows = syncStore.loadRaw(WHQOH_DATASET);
+            List<ObjectNode> localRows = syncStore.loadRaw(dsCode);
             if (!localRows.isEmpty()) {
                 rawRows = localRows;
                 sourceMode = "local";
-                Instant ts = syncStore.lastSyncedAt(WHQOH_DATASET);
+                Instant ts = syncStore.lastSyncedAt(dsCode);
                 if (ts != null) asOf = ts.toString();
             }
         }
         if (rawRows == null) {
-            rawRows = fetchDatasetFromUpstream(WHQOH_DATASET, new ArrayList<>());
-            sourceMode = "realtime";
-            asOf = Instant.now().toString();
+            try {
+                rawRows = fetchDatasetFromUpstream(dsCode, new ArrayList<>());
+                sourceMode = "realtime";
+                asOf = Instant.now().toString();
+            } catch (Exception e) {
+                if (forceRealtime && queryModeService.isLocal()) {
+                    List<ObjectNode> localFallback = syncStore.loadRaw(dsCode);
+                    if (!localFallback.isEmpty()) {
+                        rawRows = localFallback;
+                        sourceMode = "local";
+                        Instant ts = syncStore.lastSyncedAt(dsCode);
+                        if (ts != null) asOf = ts.toString();
+                    } else {
+                        throw e;
+                    }
+                } else {
+                    throw e;
+                }
+            }
         }
         return new U9InventoryRawData(rawRows == null ? List.of() : rawRows, sourceMode, asOf);
+    }
+
+    /** 读取 U9 实时现存量原始明细行（支持 local/realtime 双模与空库自动回退实时） */
+    public U9InventoryRawData loadU9InventoryRawData(boolean forceRealtime) {
+        return loadDatasetRawData(WHQOH_DATASET, forceRealtime);
     }
 
     private U9InventorySnapshot loadU9InventorySnapshot() {
