@@ -140,6 +140,45 @@ public class AiClient {
         }
     }
 
+    /** 从上游 OpenAI 兼容服务拉取可用模型列表（GET /models） */
+    public List<String> fetchModels(AiConfigService.AiConfig cfg) {
+        String url = resolveModelsUrl(cfg.baseUrl());
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(Math.max(15, cfg.timeoutSeconds())))
+                    .header("Accept", "application/json")
+                    .header("Authorization", "Bearer " + cfg.apiKey())
+                    .GET()
+                    .build();
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+                if (resp.statusCode() == 404) {
+                    throw new BizException("上游服务未提供 /models 接口（HTTP 404），请在下方手动输入添加模型名称");
+                }
+                throw new BizException(formatUpstreamError(resp.statusCode(), resp.body()));
+            }
+            JsonNode root = mapper.readTree(resp.body());
+            JsonNode arr = root.has("data") && root.get("data").isArray()
+                    ? root.get("data")
+                    : (root.has("models") && root.get("models").isArray() ? root.get("models") : root);
+            Set<String> ids = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            if (arr.isArray()) {
+                for (JsonNode item : arr) {
+                    String id = item.isTextual()
+                            ? item.asText("")
+                            : item.path("id").asText(item.path("name").asText(""));
+                    if (!id.isBlank()) ids.add(id.trim());
+                }
+            }
+            return new ArrayList<>(ids);
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BizException("获取上游模型列表失败: " + e.getMessage());
+        }
+    }
+
     /** 测试模型连通性（发一条极短的 ping 消息） */
     public Map<String, Object> testConnection(AiConfigService.AiConfig cfg) {
         long t0 = System.currentTimeMillis();
@@ -191,6 +230,16 @@ public class AiClient {
         while (u.endsWith("/")) u = u.substring(0, u.length() - 1);
         if (u.endsWith("/chat/completions")) return u;
         return u + "/chat/completions";
+    }
+
+    static String resolveModelsUrl(String baseUrl) {
+        String u = baseUrl == null ? "" : baseUrl.trim();
+        while (u.endsWith("/")) u = u.substring(0, u.length() - 1);
+        if (u.endsWith("/chat/completions")) {
+            u = u.substring(0, u.length() - "/chat/completions".length());
+        }
+        if (u.endsWith("/models")) return u;
+        return u + "/models";
     }
 
     private String formatUpstreamError(int status, String body) {

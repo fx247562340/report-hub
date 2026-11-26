@@ -11,41 +11,27 @@ type AiConfigView = {
   apiKey: string
   hasApiKey: boolean
   model: string
+  models: string[]
   temperature: number
   maxToolRounds: number
   timeoutSeconds: number
 }
 
-const PROVIDER_PRESETS = [
-  {
-    name: '智谱 BigModel',
-    desc: 'GLM-4 系列，中文理解与 Tool Calling 稳定',
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    model: 'glm-4-plus',
-  },
-  {
-    name: '阿里云百炼',
-    desc: '通义千问 Qwen 系列 OpenAI 兼容接口',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    model: 'qwen-plus',
-  },
-  {
-    name: 'DeepSeek',
-    desc: '高性价比推理与数据分析模型',
-    baseUrl: 'https://api.deepseek.com/v1',
-    model: 'deepseek-chat',
-  },
-  {
-    name: 'OpenAI / 自定义',
-    desc: '兼容 OpenAI、vLLM、Ollama 等标准服务',
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-4o-mini',
-  },
-]
+function sameModels(a: string[], b: string[]) {
+  if (a.length !== b.length) return false
+  return a.every((v, i) => v === b[i])
+}
 
 export default function AiSettings() {
   const [saved, setSaved] = useState<AiConfigView | null>(null)
   const [draft, setDraft] = useState<AiConfigView | null>(null)
+  const [manualModel, setManualModel] = useState('')
+
+  const [upstreamModels, setUpstreamModels] = useState<string[]>([])
+  const [upstreamOpen, setUpstreamOpen] = useState(false)
+  const [upstreamKw, setUpstreamKw] = useState('')
+  const [fetchingModels, setFetchingModels] = useState(false)
+
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -53,11 +39,21 @@ export default function AiSettings() {
   const [error, setError] = useState('')
   const [testResult, setTestResult] = useState<{ model: string; latencyMs: number; reply: string } | null>(null)
 
+  function normalizeView(data: AiConfigView): AiConfigView {
+    const list = Array.isArray(data.models) ? data.models.filter(Boolean) : []
+    if (data.model && !list.includes(data.model)) list.unshift(data.model)
+    return {
+      ...data,
+      models: list,
+      model: data.model || list[0] || '',
+    }
+  }
+
   async function load() {
     setLoading(true)
     setError('')
     try {
-      const data = await api.get<AiConfigView>('/api/ai/config')
+      const data = normalizeView(await api.get<AiConfigView>('/api/ai/config'))
       setSaved(data)
       setDraft({ ...data, apiKey: data.apiKey === '******' ? '' : data.apiKey })
     } catch (e: any) {
@@ -77,6 +73,7 @@ export default function AiSettings() {
       saved.enabled !== draft.enabled ||
       saved.baseUrl !== draft.baseUrl ||
       saved.model !== draft.model ||
+      !sameModels(saved.models, draft.models) ||
       saved.temperature !== draft.temperature ||
       saved.maxToolRounds !== draft.maxToolRounds ||
       saved.timeoutSeconds !== draft.timeoutSeconds ||
@@ -84,21 +81,87 @@ export default function AiSettings() {
     )
   }, [saved, draft])
 
+  function addModel(rawName: string) {
+    if (!draft) return
+    const name = rawName.trim()
+    if (!name) return
+    if (draft.models.includes(name)) {
+      setManualModel('')
+      return
+    }
+    const nextModels = [...draft.models, name]
+    setDraft({
+      ...draft,
+      models: nextModels,
+      model: draft.model || name,
+      enabled: true,
+    })
+    setManualModel('')
+  }
+
+  function toggleModelFromUpstream(name: string) {
+    if (!draft) return
+    if (draft.models.includes(name)) {
+      removeModel(name)
+    } else {
+      addModel(name)
+    }
+  }
+
+  function removeModel(name: string) {
+    if (!draft) return
+    const nextModels = draft.models.filter((m) => m !== name)
+    const nextDefault = draft.model === name ? (nextModels[0] || '') : draft.model
+    setDraft({
+      ...draft,
+      models: nextModels,
+      model: nextDefault,
+    })
+  }
+
+  function setDefaultModel(name: string) {
+    if (!draft) return
+    setDraft({ ...draft, model: name })
+    setTestResult(null)
+  }
+
+  async function onFetchUpstreamModels() {
+    if (!draft) return
+    setFetchingModels(true)
+    setError('')
+    setMsg('')
+    try {
+      const list = await api.post<string[]>('/api/ai/config/models', {
+        baseUrl: draft.baseUrl,
+        apiKey: draft.apiKey,
+      })
+      setUpstreamModels(list || [])
+      setUpstreamOpen(true)
+      setUpstreamKw('')
+      setMsg(list && list.length > 0 ? `已从上游获取 ${list.length} 个可用模型，点击即可添加或取消` : '上游返回空模型列表，请手动输入模型名称添加')
+    } catch (e: any) {
+      setError(e?.message || '获取上游模型列表失败')
+    } finally {
+      setFetchingModels(false)
+    }
+  }
+
   async function onSave() {
     if (!draft) return
     setSaving(true)
     setError('')
     setMsg('')
     try {
-      const res = await api.post<AiConfigView>('/api/ai/config', {
+      const res = normalizeView(await api.post<AiConfigView>('/api/ai/config', {
         enabled: draft.enabled,
         baseUrl: draft.baseUrl,
         apiKey: draft.apiKey,
         model: draft.model,
+        models: draft.models,
         temperature: draft.temperature,
         maxToolRounds: draft.maxToolRounds,
         timeoutSeconds: draft.timeoutSeconds,
-      })
+      }))
       setSaved(res)
       setDraft({ ...res, apiKey: res.apiKey === '******' ? '' : res.apiKey })
       setMsg('模型配置已保存并立即生效')
@@ -120,19 +183,26 @@ export default function AiSettings() {
         baseUrl: draft.baseUrl,
         apiKey: draft.apiKey,
         model: draft.model,
+        models: draft.models,
       })
       setTestResult({
         model: res.model || draft.model,
         latencyMs: res.latencyMs ?? 0,
         reply: res.reply || 'OK',
       })
-      setMsg(`连接测试通过（延迟 ${res.latencyMs ?? 0} ms）`)
+      setMsg(`连接测试通过（模型 ${res.model || draft.model} · 延迟 ${res.latencyMs ?? 0} ms）`)
     } catch (e: any) {
       setError(e?.message || '连接测试失败')
     } finally {
       setTesting(false)
     }
   }
+
+  const filteredUpstream = useMemo(() => {
+    const q = upstreamKw.trim().toLowerCase()
+    if (!q) return upstreamModels
+    return upstreamModels.filter((m) => m.toLowerCase().includes(q))
+  }, [upstreamModels, upstreamKw])
 
   if (loading && !draft) {
     return (
@@ -158,7 +228,7 @@ export default function AiSettings() {
           <div className="icon-tile sm"><Icon name="config" size={18} /></div>
           <div style={{ minWidth: 0 }}>
             <h1>模型配置</h1>
-            <p className="one-line">统一管理 OpenAI 兼容协议的大模型接入参数，供「智能问数」调用；API Key 加密存储并脱敏展示</p>
+            <p className="one-line">默认基于 OpenAI Chat Completions 协议接入，支持从上游自动拉取与配置多个可用模型</p>
           </div>
         </div>
         <div className="row">
@@ -179,44 +249,12 @@ export default function AiSettings() {
       <div className="sync-cfg-grid">
         {/* 左侧：配置表单 */}
         <div className="sync-cfg-main">
-          {/* 1. 服务商快捷模板 */}
+          {/* 1. OpenAI Chat Completions 接入参数 */}
           <section className="card sync-cfg-section">
             <div className="sync-sec-head">
               <div>
-                <h3>快速接入模板</h3>
-                <p className="muted">点击模板自动填入对应平台的 OpenAI 兼容 Base URL 与推荐模型，也可在下方自由修改</p>
-              </div>
-            </div>
-            <div className="sync-mode-cards">
-              {PROVIDER_PRESETS.map((p) => {
-                const active = draft.baseUrl.replace(/\/+$/, '') === p.baseUrl
-                return (
-                  <button
-                    type="button"
-                    key={p.name}
-                    className={`sync-mode-card${active ? ' active' : ''}`}
-                    onClick={() => {
-                      setDraft({ ...draft, baseUrl: p.baseUrl, model: p.model, enabled: true })
-                      setTestResult(null)
-                    }}
-                  >
-                    <div className="sync-mode-card-title">
-                      <span className="sync-radio-dot" />
-                      <b>{p.name}</b>
-                    </div>
-                    <span className="sync-mode-card-desc">{p.desc}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </section>
-
-          {/* 2. OpenAI 兼容接口连接参数 */}
-          <section className="card sync-cfg-section">
-            <div className="sync-sec-head">
-              <div>
-                <h3>OpenAI 兼容接口参数</h3>
-                <p className="muted">支持所有兼容 POST /chat/completions 与 Function Calling 的云端或私有化模型服务</p>
+                <h3>OpenAI Chat Completions 接口</h3>
+                <p className="muted">填写标准 OpenAI 兼容服务的 Base URL 与 API Key，系统自动调用 /chat/completions 与 /models</p>
               </div>
               <label className="sync-toggle-inline">
                 <span>{draft.enabled ? '已启用' : '已停用'}</span>
@@ -232,32 +270,21 @@ export default function AiSettings() {
               </label>
             </div>
 
-            <div className="field">
-              <label>API Base URL <span className="req">*</span></label>
-              <input
-                className="input mono"
-                placeholder="https://open.bigmodel.cn/api/paas/v4"
-                value={draft.baseUrl}
-                onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
-              />
-              <span className="hint">填写到版本路径即可，系统会自动补全 /chat/completions（不会重复拼接）</span>
-            </div>
-
             <div className="form-grid">
               <div className="field">
-                <label>模型名称（Model）<span className="req">*</span></label>
+                <label>API Base URL <span className="req">*</span></label>
                 <input
                   className="input mono"
-                  placeholder="如 glm-4-plus / qwen-plus / deepseek-chat"
-                  value={draft.model}
-                  onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                  placeholder="https://api.example.com/v1"
+                  value={draft.baseUrl}
+                  onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
                 />
-                <span className="hint">建议选用支持 Function Calling（工具调用）的通用模型</span>
+                <span className="hint">填写到版本前缀即可，系统会自动补全 /chat/completions</span>
               </div>
               <div className="field">
                 <label>
                   API Key <span className="req">*</span>
-                  {draft.hasApiKey && <span className="muted">（已保存，留空不覆盖原密钥）</span>}
+                  {draft.hasApiKey && <span className="muted">（已保存，留空不覆盖）</span>}
                 </label>
                 <input
                   className="input mono"
@@ -267,9 +294,136 @@ export default function AiSettings() {
                   value={draft.apiKey}
                   onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
                 />
-                <span className="hint">仅服务端保存并用于上游鉴权，绝不回传明文至浏览器</span>
+                <span className="hint">仅服务端保存并用于鉴权，绝不回传明文至浏览器</span>
               </div>
             </div>
+          </section>
+
+          {/* 2. 多模型配置与上游自动获取 */}
+          <section className="card sync-cfg-section">
+            <div className="sync-sec-head">
+              <div>
+                <h3>模型列表（支持多模型）</h3>
+                <p className="muted">可点击「从上游获取模型」勾选多个模型，或手动输入添加；点击已配置模型可切换为默认模型，问数页支持随时切换</p>
+              </div>
+              <button
+                type="button"
+                className="btn sm"
+                disabled={fetchingModels}
+                onClick={onFetchUpstreamModels}
+              >
+                <Icon name="refresh" size={13} className={fetchingModels ? 'spin' : ''} />
+                {fetchingModels ? '获取中…' : '从上游获取模型'}
+              </button>
+            </div>
+
+            {/* 已配置模型芯片区 */}
+            <div className="ai-models-box">
+              <div className="ai-models-box-head">
+                <span>已配置模型（{draft.models.length}）</span>
+                {draft.model && <span className="muted">当前默认：<b className="mono" style={{ color: 'var(--accent)' }}>{draft.model}</b></span>}
+              </div>
+              {draft.models.length === 0 ? (
+                <div className="ai-models-empty">
+                  暂未添加模型。请先点击右上角「从上游获取模型」选取，或在下方手动输入模型名称添加。
+                </div>
+              ) : (
+                <div className="ai-configured-tags">
+                  {draft.models.map((m) => {
+                    const isDef = m === draft.model
+                    return (
+                      <div key={m} className={`ai-model-tag${isDef ? ' default' : ''}`}>
+                        <button
+                          type="button"
+                          className="ai-model-tag-main mono"
+                          onClick={() => setDefaultModel(m)}
+                          title={isDef ? '当前默认模型' : '点击设为默认模型'}
+                        >
+                          {isDef && <em className="ai-default-pill">默认</em>}
+                          <span>{m}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="ai-model-tag-del"
+                          aria-label={`移除模型 ${m}`}
+                          title="移除该模型"
+                          onClick={() => removeModel(m)}
+                        >
+                          <Icon name="close" size={11} />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 手动添加模型 */}
+            <div className="ai-manual-add">
+              <input
+                className="input mono"
+                placeholder="手动输入模型名称（如 qwen-plus / glm-4-plus / deepseek-chat），回车添加"
+                value={manualModel}
+                onChange={(e) => setManualModel(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    addModel(manualModel)
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn sm"
+                disabled={!manualModel.trim()}
+                onClick={() => addModel(manualModel)}
+              >
+                <Icon name="plus" size={13} />添加模型
+              </button>
+            </div>
+
+            {/* 上游拉取到的可选模型面板 */}
+            {upstreamOpen && (
+              <div className="ai-upstream-panel">
+                <div className="ai-upstream-head">
+                  <div className="ai-side-search" style={{ flex: 1, maxWidth: 320 }}>
+                    <Icon name="search" size={13} />
+                    <input
+                      className="input"
+                      placeholder={`筛选上游模型（共 ${upstreamModels.length} 个）…`}
+                      value={upstreamKw}
+                      onChange={(e) => setUpstreamKw(e.target.value)}
+                    />
+                  </div>
+                  <button type="button" className="btn sm ghost" onClick={() => setUpstreamOpen(false)}>
+                    收起列表
+                  </button>
+                </div>
+                {filteredUpstream.length === 0 ? (
+                  <div className="ai-models-empty">没有匹配的上游模型</div>
+                ) : (
+                  <div className="ai-upstream-grid">
+                    {filteredUpstream.map((m) => {
+                      const picked = draft.models.includes(m)
+                      return (
+                        <button
+                          type="button"
+                          key={m}
+                          className={`ai-upstream-item mono${picked ? ' picked' : ''}`}
+                          onClick={() => toggleModelFromUpstream(m)}
+                          title={picked ? '点击移出已配置列表' : '点击加入已配置列表'}
+                        >
+                          <span className="ai-upstream-check">
+                            {picked && <Icon name="check" size={11} />}
+                          </span>
+                          <span className="ai-upstream-name">{m}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </section>
 
           {/* 3. Agent 推理与安全护栏参数 */}
@@ -377,7 +531,8 @@ export default function AiSettings() {
             <h3 style={{ margin: '0 0 12px', fontSize: 15 }}>当前服务状态</h3>
             <div className="rel-insp-kv">
               <div><span>服务开关</span><b>{saved?.enabled ? '已启用' : '已停用'}</b></div>
-              <div><span>当前模型</span><b className="mono">{saved?.model || '—'}</b></div>
+              <div><span>默认模型</span><b className="mono">{saved?.model || '—'}</b></div>
+              <div><span>已配模型数</span><b>{saved?.models?.length || 0} 个</b></div>
               <div><span>接口地址</span><b className="mono">{saved?.baseUrl || '—'}</b></div>
               <div><span>API Key</span><b className="mono">{saved?.hasApiKey ? '已配置（******）' : '未配置'}</b></div>
             </div>
@@ -399,7 +554,7 @@ export default function AiSettings() {
                 disabled={testing}
                 onClick={onTest}
               >
-                <Icon name="bolt" size={14} />{testing ? '正在检测连通性…' : '立即测试模型连接'}
+                <Icon name="bolt" size={14} />{testing ? '正在检测连通性…' : '测试默认模型连接'}
               </button>
               <Link className="btn primary" style={{ width: '100%' }} to="/ai">
                 <Icon name="sparkle" size={14} />前往「智能问数」体验
@@ -408,9 +563,9 @@ export default function AiSettings() {
           </div>
 
           <div className="card">
-            <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>安全与口径说明</h3>
+            <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>协议与安全说明</h3>
             <p className="rel-insp-note" style={{ marginBottom: 0 }}>
-              AI 问数仅开放 6 个只读业务工具，所有金额、吨位、排名与环比均由后端 Java 核算引擎基于本地同步库精确计算，模型无法接触用户密码、数据源密钥或任何写接口。
+              默认采用标准 OpenAI Chat Completions 协议（支持 Function Calling）；AI 仅开放 6 个只读业务工具，所有金额、吨位、排名与环比均由后端 Java 引擎精确计算。
             </p>
           </div>
         </aside>

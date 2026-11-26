@@ -9,6 +9,7 @@ type AiConfigStatus = {
   enabled: boolean
   ready: boolean
   model: string
+  models?: string[]
 }
 
 type AiSession = {
@@ -63,6 +64,7 @@ export default function AiChat() {
   const isAdmin = getUser()?.role === 'admin'
 
   const [config, setConfig] = useState<AiConfigStatus | null>(null)
+  const [selectedModel, setSelectedModel] = useState<string>('')
   const [sessions, setSessions] = useState<AiSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string>('')
   const [messages, setMessages] = useState<ChatMsg[]>([])
@@ -85,6 +87,7 @@ export default function AiChat() {
         api.get<AiSession[]>('/api/ai/sessions'),
       ])
       setConfig(c)
+      setSelectedModel(c?.model || c?.models?.[0] || '')
       setSessions(list || [])
       if (list && list.length > 0) {
         selectSession(list[0].id)
@@ -195,6 +198,7 @@ export default function AiChat() {
         body: JSON.stringify({
           sessionId: activeSessionId || '',
           question: q,
+          model: selectedModel || config?.model || '',
         }),
         signal: ctrl.signal,
       })
@@ -405,7 +409,19 @@ export default function AiChat() {
             </div>
           </div>
           <div className="row" style={{ gap: 8 }}>
-            {isAdmin ? (
+            {config?.ready && (config.models?.length || 0) > 1 ? (
+              <select
+                className="select ai-model-select"
+                value={selectedModel || config.model}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                aria-label="切换问答模型"
+                title="切换当前问数使用的模型"
+              >
+                {config.models!.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            ) : isAdmin ? (
               <Link
                 to="/ai-settings"
                 className={`ai-model-chip${config?.ready ? ' ready' : ' unconfigured'}`}

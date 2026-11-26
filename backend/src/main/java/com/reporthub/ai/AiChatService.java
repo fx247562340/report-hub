@@ -98,13 +98,21 @@ public class AiChatService {
     }
 
     /** 发起一次流式多轮问答，并把问答记录、调用工具与下钻链接持久化落库 */
-    public SseEmitter streamChat(String username, boolean isAdmin, String sessionId, String question) {
+    public SseEmitter streamChat(String username, boolean isAdmin, String sessionId, String question, String requestedModel) {
         if (question == null || question.isBlank()) {
             throw new BizException("请输入要查询的问题");
         }
         AiConfigService.AiConfig cfg = configService.current();
         if (!cfg.isReady()) {
             throw new BizException("尚未配置可用的 AI 模型，请先前往「系统管理 → 模型配置」完成设置");
+        }
+        if (requestedModel != null && !requestedModel.isBlank()) {
+            String rm = requestedModel.trim();
+            boolean allowed = rm.equals(cfg.model()) || (cfg.models() != null && cfg.models().contains(rm));
+            if (!allowed) {
+                throw new BizException("所选模型未在系统配置列表中: " + rm);
+            }
+            cfg = cfg.withModel(rm);
         }
 
         // 确保会话归属；未传 sessionId 时自动新建会话并以问题前 24 字命名
@@ -131,7 +139,8 @@ public class AiChatService {
 
         SseEmitter emitter = new SseEmitter(180_000L);
         final AiSession finalSession = session;
-        executor.execute(() -> runAgentLoop(emitter, cfg, finalSession, history, question.trim(), isAdmin));
+        final AiConfigService.AiConfig effectiveCfg = cfg;
+        executor.execute(() -> runAgentLoop(emitter, effectiveCfg, finalSession, history, question.trim(), isAdmin));
         return emitter;
     }
 

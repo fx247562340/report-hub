@@ -1,5 +1,6 @@
 package com.reporthub.ai;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reporthub.common.BizException;
 import com.reporthub.domain.AppSetting;
@@ -8,11 +9,10 @@ import com.reporthub.service.ConfigService;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.*;
 
 /**
- * OpenAI 兼容模型配置持久化（存放在 app_settings.ai_config，页面可动态修改，API Key 严格脱敏）。
+ * OpenAI 兼容模型配置持久化（存放在 app_settings.ai_config，支持多模型配置与默认模型选择，API Key 严格脱敏）。
  */
 @Service
 public class AiConfigService {
@@ -23,6 +23,7 @@ public class AiConfigService {
             String baseUrl,
             String apiKey,
             String model,
+            List<String> models,
             double temperature,
             int maxToolRounds,
             int timeoutSeconds
@@ -32,6 +33,10 @@ public class AiConfigService {
                     && baseUrl != null && !baseUrl.isBlank()
                     && apiKey != null && !apiKey.isBlank()
                     && model != null && !model.isBlank();
+        }
+
+        public AiConfig withModel(String overrideModel) {
+            return new AiConfig(enabled, baseUrl, apiKey, overrideModel, models, temperature, maxToolRounds, timeoutSeconds);
         }
     }
 
@@ -56,15 +61,31 @@ public class AiConfigService {
     }
 
     private AiConfig loadFromDbOrEnv() {
-        var opt = settingRepo != null ? settingRepo.findById(SETTING_KEY) : java.util.Optional.<AppSetting>empty();
+        var opt = settingRepo != null ? settingRepo.findById(SETTING_KEY) : Optional.<AppSetting>empty();
         if (opt.isPresent() && opt.get().getValue() != null && !opt.get().getValue().isBlank()) {
             try {
-                var node = mapper.readTree(opt.get().getValue());
+                JsonNode node = mapper.readTree(opt.get().getValue());
+                String defModel = node.path("model").asText("").trim();
+                List<String> models = new ArrayList<>();
+                JsonNode arr = node.path("models");
+                if (arr.isArray()) {
+                    for (JsonNode item : arr) {
+                        String m = item.asText("").trim();
+                        if (!m.isEmpty() && !models.contains(m)) models.add(m);
+                    }
+                }
+                if (!defModel.isEmpty() && !models.contains(defModel)) {
+                    models.add(0, defModel);
+                }
+                if (defModel.isEmpty() && !models.isEmpty()) {
+                    defModel = models.get(0);
+                }
                 return new AiConfig(
                         node.path("enabled").asBoolean(true),
                         node.path("baseUrl").asText(""),
                         node.path("apiKey").asText(""),
-                        node.path("model").asText(""),
+                        defModel,
+                        List.copyOf(models),
                         clampDouble(node.path("temperature").asDouble(0.2), 0.0, 1.5),
                         clampInt(node.path("maxToolRounds").asInt(4), 1, 8),
                         clampInt(node.path("timeoutSeconds").asInt(60), 10, 180)
@@ -76,8 +97,9 @@ public class AiConfigService {
         String envBase = env("AI_BASE_URL", "");
         String envKey = env("AI_API_KEY", "");
         String envModel = env("AI_MODEL", "");
+        List<String> envModels = envModel.isBlank() ? List.of() : List.of(envModel);
         boolean envEnabled = !envBase.isBlank() && !envKey.isBlank() && !envModel.isBlank();
-        return new AiConfig(envEnabled, envBase, envKey, envModel, 0.2, 4, 60);
+        return new AiConfig(envEnabled, envBase, envKey, envModel, envModels, 0.2, 4, 60);
     }
 
     /** 返回前端展示视图（API Key 始终脱敏为 ******） */
@@ -90,6 +112,7 @@ public class AiConfigService {
         m.put("apiKey", (c.apiKey() != null && !c.apiKey().isBlank()) ? ConfigService.SECRET_MASK : "");
         m.put("hasApiKey", c.apiKey() != null && !c.apiKey().isBlank());
         m.put("model", c.model() == null ? "" : c.model());
+        m.put("models", c.models() == null ? List.of() : c.models());
         m.put("temperature", c.temperature());
         m.put("maxToolRounds", c.maxToolRounds());
         m.put("timeoutSeconds", c.timeoutSeconds());
@@ -105,9 +128,26 @@ public class AiConfigService {
         String baseUrl = body.containsKey("baseUrl")
                 ? cleanUrl(String.valueOf(body.getOrDefault("baseUrl", "")))
                 : existing.baseUrl();
+
+        List<String> models = new ArrayList<>();
+        if (body.containsKey("models") && body.get("models") instanceof Collection<?> rawList) {
+            for (Object item : rawList) {
+                String s = item == null ? "" : String.valueOf(item).trim();
+                if (!s.isEmpty() && !models.contains(s)) models.add(s);
+            }
+        } else if (existing.models() != null) {
+            models.addAll(existing.models());
+        }
+
         String model = body.containsKey("model")
                 ? String.valueOf(body.getOrDefault("model", "")).trim()
                 : existing.model();
+        if (!model.isBlank() && !models.contains(model)) {
+            models.add(0, model);
+        }
+        if (model.isBlank() && !models.isEmpty()) {
+            model = models.get(0);
+        }
 
         String incomingKey = body.containsKey("apiKey")
                 ? String.valueOf(body.getOrDefault("apiKey", "")).trim()
@@ -134,17 +174,19 @@ public class AiConfigService {
             if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
                 throw new BizException("API Base URL 必须以 http:// 或 https:// 开头");
             }
-            if (model.isBlank()) throw new BizException("启用 AI 问数时，请填写模型名称（Model）");
+            if (model.isBlank()) throw new BizException("启用 AI 问数时，请至少添加并选择一个默认模型");
             if (finalKey.isBlank()) throw new BizException("启用 AI 问数时，请填写 API Key");
         }
 
-        AiConfig next = new AiConfig(enabled, baseUrl, finalKey, model, temperature, maxToolRounds, timeoutSeconds);
+        AiConfig next = new AiConfig(enabled, baseUrl, finalKey, model, List.copyOf(models),
+                temperature, maxToolRounds, timeoutSeconds);
         try {
             Map<String, Object> raw = new LinkedHashMap<>();
             raw.put("enabled", next.enabled());
             raw.put("baseUrl", next.baseUrl());
             raw.put("apiKey", next.apiKey());
             raw.put("model", next.model());
+            raw.put("models", next.models());
             raw.put("temperature", next.temperature());
             raw.put("maxToolRounds", next.maxToolRounds());
             raw.put("timeoutSeconds", next.timeoutSeconds());
@@ -161,19 +203,44 @@ public class AiConfigService {
         return maskedView();
     }
 
+    /** 构造拉取上游 /models 列表用的临时配置（无需先填 model） */
+    public AiConfig resolveForFetchModels(Map<String, Object> body) {
+        AiConfig existing = current();
+        String baseUrl = cleanUrl(body != null && body.containsKey("baseUrl")
+                ? String.valueOf(body.getOrDefault("baseUrl", ""))
+                : existing.baseUrl());
+        String incomingKey = body != null && body.containsKey("apiKey")
+                ? String.valueOf(body.getOrDefault("apiKey", "")).trim()
+                : "";
+        String finalKey = (incomingKey.isBlank() || ConfigService.SECRET_MASK.equals(incomingKey))
+                ? existing.apiKey() : incomingKey;
+        if (baseUrl.isBlank()) throw new BizException("请先填写 API Base URL");
+        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+            throw new BizException("API Base URL 必须以 http:// 或 https:// 开头");
+        }
+        if (finalKey == null || finalKey.isBlank()) throw new BizException("请先填写 API Key");
+        return new AiConfig(true, baseUrl, finalKey, "", List.of(), 0.1, 1, 20);
+    }
+
     /** 基于页面传入（或已保存）的配置构造一次测试用 AiConfig */
     public AiConfig resolveForTest(Map<String, Object> body) {
         AiConfig existing = current();
         if (body == null || body.isEmpty()) return existing;
         String baseUrl = cleanUrl(String.valueOf(body.getOrDefault("baseUrl", existing.baseUrl())));
         String model = String.valueOf(body.getOrDefault("model", existing.model())).trim();
+        if (model.isBlank() && body.get("models") instanceof Collection<?> rawList) {
+            for (Object item : rawList) {
+                String s = item == null ? "" : String.valueOf(item).trim();
+                if (!s.isEmpty()) { model = s; break; }
+            }
+        }
         String incomingKey = String.valueOf(body.getOrDefault("apiKey", "")).trim();
         String finalKey = (incomingKey.isBlank() || ConfigService.SECRET_MASK.equals(incomingKey))
                 ? existing.apiKey() : incomingKey;
         if (baseUrl.isBlank() || model.isBlank() || finalKey == null || finalKey.isBlank()) {
-            throw new BizException("请先填写完整的 Base URL、Model 与 API Key");
+            throw new BizException("请先填写 API Base URL、API Key 并选择一个模型");
         }
-        return new AiConfig(true, baseUrl, finalKey, model, 0.1, 1, 25);
+        return new AiConfig(true, baseUrl, finalKey, model, List.of(model), 0.1, 1, 25);
     }
 
     private static String cleanUrl(String u) {

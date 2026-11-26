@@ -44,6 +44,12 @@ public class AiController {
         return ApiResponse.ok(configService.save(body));
     }
 
+    @PostMapping("/config/models")
+    public ApiResponse<List<String>> fetchUpstreamModels(@RequestBody(required = false) Map<String, Object> body) {
+        AiConfigService.AiConfig cfg = configService.resolveForFetchModels(body);
+        return ApiResponse.ok(aiClient.fetchModels(cfg));
+    }
+
     @PostMapping("/config/test")
     public ApiResponse<Map<String, Object>> testConfig(@RequestBody(required = false) Map<String, Object> body) {
         AiConfigService.AiConfig cfg = configService.resolveForTest(body);
@@ -91,7 +97,8 @@ public class AiController {
                 auth.getName(),
                 isAdmin,
                 body.get("sessionId"),
-                body.get("question")
+                body.get("question"),
+                body.get("model")
         );
     }
 }

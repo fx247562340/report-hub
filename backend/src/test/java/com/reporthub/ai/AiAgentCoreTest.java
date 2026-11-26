@@ -49,6 +49,10 @@ class AiAgentCoreTest {
                 AiClient.resolveCompletionsUrl("https://open.bigmodel.cn/api/paas/v4"));
         assertEquals("https://example.com/v1/chat/completions",
                 AiClient.resolveCompletionsUrl("https://example.com/v1/chat/completions"));
+        assertEquals("https://api.deepseek.com/v1/models",
+                AiClient.resolveModelsUrl("https://api.deepseek.com/v1/"));
+        assertEquals("https://example.com/v1/models",
+                AiClient.resolveModelsUrl("https://example.com/v1/chat/completions"));
     }
 
     @Test
