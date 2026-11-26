@@ -17,6 +17,17 @@ type AiConfigView = {
   timeoutSeconds: number
 }
 
+type TestResult = {
+  model: string
+  latencyMs: number
+  reply: string
+  toolCallingSupported: boolean
+  toolCallStatus: 'ok' | 'skipped' | 'error'
+  toolCallLatencyMs: number
+  toolCallName: string
+  toolCallDetail: string
+}
+
 function sameModels(a: string[], b: string[]) {
   if (a.length !== b.length) return false
   return a.every((v, i) => v === b[i])
@@ -34,10 +45,14 @@ export default function AiSettings() {
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [testing, setTesting] = useState(false)
+  const [testingModel, setTestingModel] = useState<string | null>(null)
   const [msg, setMsg] = useState('')
+  const [warn, setWarn] = useState('')
   const [error, setError] = useState('')
-  const [testResult, setTestResult] = useState<{ model: string; latencyMs: number; reply: string } | null>(null)
+  const [testResult, setTestResult] = useState<TestResult | null>(null)
+  const [testedMap, setTestedMap] = useState<Record<string, TestResult>>({})
+
+  const testing = testingModel !== null
 
   function normalizeView(data: AiConfigView): AiConfigView {
     const list = Array.isArray(data.models) ? data.models.filter(Boolean) : []
@@ -172,29 +187,42 @@ export default function AiSettings() {
     }
   }
 
-  async function onTest() {
+  async function onTest(targetModel?: string) {
     if (!draft) return
-    setTesting(true)
+    const modelToTest = (targetModel || draft.model || '').trim()
+    setTestingModel(modelToTest || '__default__')
     setError('')
+    setWarn('')
     setMsg('')
-    setTestResult(null)
     try {
       const res = await api.post<any>('/api/ai/config/test', {
         baseUrl: draft.baseUrl,
         apiKey: draft.apiKey,
-        model: draft.model,
+        model: modelToTest,
         models: draft.models,
       })
-      setTestResult({
-        model: res.model || draft.model,
+      const modelName = res.model || modelToTest
+      const parsed: TestResult = {
+        model: modelName,
         latencyMs: res.latencyMs ?? 0,
         reply: res.reply || 'OK',
-      })
-      setMsg(`连接测试通过（模型 ${res.model || draft.model} · 延迟 ${res.latencyMs ?? 0} ms）`)
+        toolCallingSupported: Boolean(res.toolCallingSupported),
+        toolCallStatus: (res.toolCallStatus as TestResult['toolCallStatus']) || (res.toolCallingSupported ? 'ok' : 'skipped'),
+        toolCallLatencyMs: res.toolCallLatencyMs ?? 0,
+        toolCallName: res.toolCallName || '',
+        toolCallDetail: res.toolCallDetail || '',
+      }
+      setTestResult(parsed)
+      setTestedMap((prev) => ({ ...prev, [modelName]: parsed }))
+      if (parsed.toolCallingSupported) {
+        setMsg(`自检通过：${modelName}（连通 ${parsed.latencyMs} ms · Tool Calling 支持，${parsed.toolCallLatencyMs} ms）`)
+      } else {
+        setWarn(`模型 ${modelName} 接口可连通（${parsed.latencyMs} ms），但 Tool Calling 自检未通过：${parsed.toolCallDetail}`)
+      }
     } catch (e: any) {
       setError(e?.message || '连接测试失败')
     } finally {
-      setTesting(false)
+      setTestingModel(null)
     }
   }
 
@@ -239,6 +267,12 @@ export default function AiSettings() {
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {warn && (
+        <div className="ai-warn-banner">
+          <Icon name="alert" size={14} />
+          <span>{warn}</span>
+        </div>
+      )}
       {msg && (
         <div className="sync-notice">
           <Icon name="check" size={14} />
@@ -331,6 +365,8 @@ export default function AiSettings() {
                 <div className="ai-configured-tags">
                   {draft.models.map((m) => {
                     const isDef = m === draft.model
+                    const tested = testedMap[m]
+                    const isThisTesting = testingModel === m
                     return (
                       <div key={m} className={`ai-model-tag${isDef ? ' default' : ''}`}>
                         <button
@@ -341,6 +377,24 @@ export default function AiSettings() {
                         >
                           {isDef && <em className="ai-default-pill">默认</em>}
                           <span>{m}</span>
+                          {tested && (
+                            <span
+                              className={`ai-tc-dot ${tested.toolCallingSupported ? 'ok' : 'warn'}`}
+                              title={tested.toolCallingSupported ? `Tool Calling 支持（${tested.toolCallLatencyMs} ms）` : `Tool Calling 未通过：${tested.toolCallDetail}`}
+                            >
+                              {tested.toolCallingSupported ? 'TC✓' : 'TC✗'}
+                            </span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="ai-model-tag-test"
+                          aria-label={`自检模型 ${m}`}
+                          title={`测试 ${m} 连通性与 Tool Calling 能力`}
+                          disabled={testing}
+                          onClick={() => onTest(m)}
+                        >
+                          <Icon name={isThisTesting ? 'refresh' : 'bolt'} size={11} className={isThisTesting ? 'spin' : ''} />
                         </button>
                         <button
                           type="button"
@@ -492,9 +546,10 @@ export default function AiSettings() {
                 type="button"
                 className="btn sm"
                 disabled={testing}
-                onClick={onTest}
+                onClick={() => onTest()}
+                title="检测基础连通性与 Tool Calling 能力"
               >
-                {testing ? '测试中…' : '测试连接'}
+                {testing ? '自检中…' : '测试连接'}
               </button>
               <button
                 type="button"
@@ -503,6 +558,7 @@ export default function AiSettings() {
                 onClick={() => {
                   if (saved) setDraft({ ...saved, apiKey: '' })
                   setError('')
+                  setWarn('')
                   setMsg('')
                 }}
               >
@@ -538,11 +594,30 @@ export default function AiSettings() {
             </div>
 
             {testResult && (
-              <div className="sync-notice" style={{ marginTop: 12, marginBottom: 0 }}>
-                <Icon name="check" size={14} />
-                <span>
-                  测试成功 · {testResult.model} · {testResult.latencyMs} ms
-                </span>
+              <div className={`ai-test-card ${testResult.toolCallingSupported ? 'ok' : 'warn'}`}>
+                <div className="ai-test-card-head">
+                  <span className="mono">{testResult.model}</span>
+                  <span className={`badge ${testResult.toolCallingSupported ? 'ok' : 'warn'}`}>
+                    {testResult.toolCallingSupported ? '适合问数' : '不建议问数'}
+                  </span>
+                </div>
+                <div className="ai-test-rows">
+                  <div className="ai-test-row">
+                    <span>接口连通性</span>
+                    <b className="ok">正常 · {testResult.latencyMs} ms</b>
+                  </div>
+                  <div className="ai-test-row">
+                    <span>Tool Calling</span>
+                    <b className={testResult.toolCallingSupported ? 'ok' : 'warn'}>
+                      {testResult.toolCallingSupported
+                        ? `支持 · ${testResult.toolCallLatencyMs} ms`
+                        : (testResult.toolCallStatus === 'error' ? '接口不支持' : '未触发工具')}
+                    </b>
+                  </div>
+                </div>
+                {testResult.toolCallDetail && (
+                  <div className="ai-test-detail">{testResult.toolCallDetail}</div>
+                )}
               </div>
             )}
 
@@ -552,9 +627,9 @@ export default function AiSettings() {
                 className="btn"
                 style={{ width: '100%' }}
                 disabled={testing}
-                onClick={onTest}
+                onClick={() => onTest()}
               >
-                <Icon name="bolt" size={14} />{testing ? '正在检测连通性…' : '测试默认模型连接'}
+                <Icon name="bolt" size={14} />{testing ? '正在检测连通性与 Tool Calling…' : '测试连接与 Tool Calling'}
               </button>
               <Link className="btn primary" style={{ width: '100%' }} to="/ai">
                 <Icon name="sparkle" size={14} />前往「智能问数」体验

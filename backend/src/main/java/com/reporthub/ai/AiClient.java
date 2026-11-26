@@ -53,6 +53,10 @@ public class AiClient {
             body.put("tool_choice", "auto");
         }
         String respBody = sendJson(cfg, body);
+        return parseChatTurn(respBody);
+    }
+
+    ChatTurnResult parseChatTurn(String respBody) {
         try {
             JsonNode root = mapper.readTree(respBody);
             JsonNode choice = root.path("choices").path(0);
@@ -179,8 +183,9 @@ public class AiClient {
         }
     }
 
-    /** 测试模型连通性（发一条极短的 ping 消息） */
+    /** 测试模型连通性 + Tool Calling 能力自检 */
     public Map<String, Object> testConnection(AiConfigService.AiConfig cfg) {
+        // Step 1: 基础 Chat Completions 连通性测试
         long t0 = System.currentTimeMillis();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", cfg.model());
@@ -189,17 +194,101 @@ public class AiClient {
         body.put("stream", false);
         body.put("messages", List.of(Map.of("role", "user", "content", "请只回复：OK")));
         String respBody = sendJson(cfg, body);
-        long ms = System.currentTimeMillis() - t0;
+        long pingMs = System.currentTimeMillis() - t0;
         String reply = "";
         try {
             reply = mapper.readTree(respBody).path("choices").path(0).path("message").path("content").asText("").trim();
         } catch (Exception ignored) {}
+
+        // Step 2: 模拟真实智能问数的 Tool Calling 能力自检（使用真实系统提示词 + 多工具 + auto）
+        long t1 = System.currentTimeMillis();
+        boolean toolSupported = false;
+        String toolStatus = "skipped";
+        String toolName = "";
+        String toolDetail = "";
+        try {
+            Map<String, Object> probeBody = buildToolProbeRequest(cfg.model());
+            String probeResp = sendJson(cfg, probeBody);
+            ChatTurnResult turn = parseChatTurn(probeResp);
+            if (turn.toolCalls() != null && !turn.toolCalls().isEmpty()) {
+                ToolCall first = turn.toolCalls().get(0);
+                toolSupported = true;
+                toolStatus = "ok";
+                toolName = first.name();
+                String args = first.arguments() == null ? "{}" : first.arguments().trim();
+                if (args.length() > 120) args = args.substring(0, 120) + "...";
+                toolDetail = "成功触发 " + first.name() + "(" + args + ")";
+            } else {
+                toolSupported = false;
+                toolStatus = "skipped";
+                toolDetail = "模型未触发工具调用（直接输出了文本），用于智能问数可能产生数据幻觉，不建议使用";
+            }
+        } catch (BizException e) {
+            toolSupported = false;
+            toolStatus = "error";
+            toolDetail = "接口或模型不支持 tools 参数：" + e.getMessage();
+        } catch (Exception e) {
+            toolSupported = false;
+            toolStatus = "error";
+            toolDetail = "Tool Calling 探测异常：" + e.getMessage();
+        }
+        long toolMs = System.currentTimeMillis() - t1;
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
         out.put("model", cfg.model());
-        out.put("latencyMs", ms);
+        out.put("latencyMs", pingMs);
         out.put("reply", reply.isEmpty() ? "连接成功" : reply);
+        out.put("toolCallingSupported", toolSupported);
+        out.put("toolCallStatus", toolStatus);
+        out.put("toolCallLatencyMs", toolMs);
+        out.put("toolCallName", toolName);
+        out.put("toolCallDetail", toolDetail);
         return out;
+    }
+
+    static Map<String, Object> buildToolProbeRequest(String model) {
+        Map<String, Object> flowTool = Map.of(
+                "type", "function",
+                "function", Map.of(
+                        "name", "query_cust_monthly_flow",
+                        "description", "查询客户月度出入库汇总：direction=in 查黑件入库，direction=out 查白件出库（成品发货吨位）。",
+                        "parameters", Map.of(
+                                "type", "object",
+                                "properties", Map.of(
+                                        "direction", Map.of("type", "string", "enum", List.of("in", "out")),
+                                        "month", Map.of("type", "string", "description", "YYYY-MM"),
+                                        "limit", Map.of("type", "integer")
+                                ),
+                                "required", List.of("direction")
+                        )
+                )
+        );
+        Map<String, Object> scrollTool = Map.of(
+                "type", "function",
+                "function", Map.of(
+                        "name", "query_contract_scroll",
+                        "description", "查询销售合同滚动统计报表（发货、开票、回款、欠款、在制库存）。",
+                        "parameters", Map.of(
+                                "type", "object",
+                                "properties", Map.of(
+                                        "month", Map.of("type", "string", "description", "YYYY-MM"),
+                                        "customerKeyword", Map.of("type", "string")
+                                )
+                        )
+                )
+        );
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", model);
+        body.put("temperature", 0.0);
+        body.put("stream", false);
+        body.put("messages", List.of(
+                Map.of("role", "system", "content", AiPromptBuilder.buildSystemPrompt()),
+                Map.of("role", "user", "content", "11月发货数量最多的客户")
+        ));
+        body.put("tools", List.of(flowTool, scrollTool));
+        body.put("tool_choice", "auto");
+        return body;
     }
 
     private String sendJson(AiConfigService.AiConfig cfg, Map<String, Object> body) {

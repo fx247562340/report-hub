@@ -63,4 +63,50 @@ class AiAgentCoreTest {
         assertNotEquals("real-secret", view.get("apiKey"));
         assertTrue("".equals(view.get("apiKey")) || ConfigService.SECRET_MASK.equals(view.get("apiKey")));
     }
+
+    @Test
+    void aiClientBuildsToolProbeAndParsesToolCalls() {
+        AiClient client = new AiClient(new ObjectMapper());
+        var probe = AiClient.buildToolProbeRequest("deepseek-v4.1-flash");
+        assertEquals("deepseek-v4.1-flash", probe.get("model"));
+        assertEquals("auto", probe.get("tool_choice"));
+        assertInstanceOf(java.util.List.class, probe.get("tools"));
+        assertEquals(2, ((java.util.List<?>) probe.get("tools")).size());
+
+        String withToolJson = """
+                {
+                  "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {
+                      "role": "assistant",
+                      "content": "",
+                      "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                          "name": "query_cust_monthly_flow",
+                          "arguments": "{\\"direction\\":\\"out\\",\\"month\\":\\"2026-11\\"}"
+                        }
+                      }]
+                    }
+                  }]
+                }
+                """;
+        var parsed = client.parseChatTurn(withToolJson);
+        assertEquals("tool_calls", parsed.finishReason());
+        assertEquals(1, parsed.toolCalls().size());
+        assertEquals("query_cust_monthly_flow", parsed.toolCalls().get(0).name());
+
+        String noToolJson = """
+                {
+                  "choices": [{
+                    "finish_reason": "stop",
+                    "message": { "role": "assistant", "content": "11月发货最多的是某公司" }
+                  }]
+                }
+                """;
+        var skipped = client.parseChatTurn(noToolJson);
+        assertEquals("stop", skipped.finishReason());
+        assertTrue(skipped.toolCalls().isEmpty());
+    }
 }
